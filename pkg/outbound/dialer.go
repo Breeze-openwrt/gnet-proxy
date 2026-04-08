@@ -28,8 +28,8 @@ func (d *Dialer) Dial(rule config.RouteRule) (net.Conn, error) {
 	}
 	// 🛡️ [长连接保障] 使用自定义 Dialer 显式开启 TCP Keep-Alive
 	dialer := &net.Dialer{
-		Timeout:   3 * time.Second,
-		KeepAlive: 5 * time.Minute, // 每 5 分钟发送一次保活探测包
+		Timeout:   3 * time.Second, // 拨号超时，超过 3 秒连不上后端就放弃，不让客户端傻等
+		KeepAlive: 30 * time.Second, // 🆕 [铁律级保活]：每 30 秒发送一次心跳包，确保防火墙不会掐断闲置连接
 	}
 	conn, err := dialer.Dial(network, target)
 	if err == nil && network == "tcp" {

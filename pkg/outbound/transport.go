@@ -35,13 +35,16 @@ func (t *Transport) RelayBack(c gnet.Conn, backendConn net.Conn) {
 	
 	for {
 		// 🌊 [下行智能背压：控制水流速度]
-		// 逻辑：如果客户端处理得慢，代码积压在 gnet 的发送缓冲区里超过 4MB，
-		//我们就暂时停止从后端物理连接读取数据。
-		// 这样做的好处：1. 防止内存溢出；2. 触发后端的 TCP 拥塞控制，让整个链路达到动态平衡。
-		if c.OutboundBuffered() > 4*1024*1024 {
+		// 逻辑：如果客户端处理得慢，代码积压在 gnet 的发送缓冲区里超过 8MB，我们就暂时停止从后端物理连接读取数据。
+		if c.OutboundBuffered() > 8*1024*1024 {
 			time.Sleep(1 * time.Millisecond) // 稍微缓一缓，给客户端一点消化时间
 			continue
 		}
+
+		// 🛡️ [健壮性加固：读超时防护]
+		// 设置 5 分钟的读取截止时间。如果后端长时间“静默”不发货，
+		// 我们会触发超时并主动断开，防止空占着茅坑不拉屎。
+		backendConn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 
 		// 📥 1. 从后端链接读取数据
 		n, err := backendConn.Read(buf)

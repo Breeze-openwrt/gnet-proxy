@@ -4,6 +4,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic" // 🔒 用于原子级安全地记录连接的暂停状态
+	"time"        // 🆕 增加时间处理，支持超时控制机制
 
 	"github.com/panjf2000/gnet/v2" // 🚀 极高性能的轻量级网络框架，其核心是“事件循环”模型
 
@@ -118,9 +119,9 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 			return gnet.Close // 没路由匹配，说明是不合法的业务，直接断开！
 		}
 
-		// 🚀 [容量进化：320MB 瞬间缓存]：将管道容量提升至 10240。
-		// 计算公式：10240 slots * 32KB/slot = 320MB。这能极大地平滑大文件传输时的速率波动。
-		newCtx := &connContext{isDialing: true, writeChan: make(chan []byte, 10240)}
+		// 🚀 [生产级配比：64MB 瞬间缓存]：将管道容量设定为 2048。
+		// 计算公式：2048 slots * 32KB/slot = 64MB。这是一个在性能与内存安全之间的黄金平衡点。
+		newCtx := &connContext{isDialing: true, writeChan: make(chan []byte, 2048)}
 		c.SetContext(newCtx)
 
 		// 抢救第一包数据：把刚刚看到的识别数据拿出来，复制一份存进管道。
@@ -146,13 +147,13 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 			select {
 			case pCtx.writeChan <- msgCopy[:n]:
 				// 🌊 [背压自感知：高水位触发]
-				// 水位达到 80% (约 8192 个包) 时触发背压封印
-				if len(pCtx.writeChan) > 8192 && atomic.CompareAndSwapInt32(&pCtx.isPaused, 0, 1) {
-					logger.Infof("🚦 [背压预警] 积压过大，暂时拦截读事件 (Client %s, 水位: %d/320MB)", c.RemoteAddr(), len(pCtx.writeChan))
+				// 水位达到 80% (约 1600 个包) 时触发背压封印，防止内存撑爆
+				if len(pCtx.writeChan) > 1600 && atomic.CompareAndSwapInt32(&pCtx.isPaused, 0, 1) {
+					logger.Infof("🚦 [背压预警] 积压过大，暂时拦截读事件 (Client %s, 水位: %d/64MB)", c.RemoteAddr(), len(pCtx.writeChan))
 					return gnet.None 
 				}
 			default:
-				// 如果 10240 个槽位都满了拨号还没好，说明网络太烂或突发流量过猛，为了系统稳定必须“绝交”
+				// 如果 2048 个槽位都满了拨号还没好，说明网络太烂或突发流量过猛，为了系统稳定必须“绝交”
 				pool.Put(msgCopy)
 				logger.Errorf("⚠️ [拥塞断线] 拨号过程中缓冲区已爆满 (Client %s)！", c.RemoteAddr())
 				return gnet.Close
@@ -171,8 +172,8 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 			select {
 			case pCtx.writeChan <- msgCopy[:n]:
 				// 🌊 [全速模式背压检测]
-				if len(pCtx.writeChan) > 8192 && atomic.CompareAndSwapInt32(&pCtx.isPaused, 0, 1) {
-					logger.Infof("🚦 [流量限载] 转发瓶颈，背压生效 (Client %s, 水位: %d/320MB)", c.RemoteAddr(), len(pCtx.writeChan))
+				if len(pCtx.writeChan) > 1600 && atomic.CompareAndSwapInt32(&pCtx.isPaused, 0, 1) {
+					logger.Infof("🚦 [流量限载] 转发瓶颈，背压生效 (Client %s, 水位: %d/64MB)", c.RemoteAddr(), len(pCtx.writeChan))
 				}
 			default:
 				pool.Put(msgCopy)
@@ -227,6 +228,11 @@ func (s *Server) relayUp(c gnet.Conn, ctx *connContext) {
 	}()
 
 	for msg := range ctx.writeChan {
+		// 🛡️ [健壮性加固：写超时防护]
+		// 设置 5 分钟的写入截止时间。如果后端彻底“假死”不收包，
+		// 我们会在 5 分钟后触发超时，从而及时回收连接资源。
+		ctx.backendConn.SetWriteDeadline(time.Now().Add(5 * time.Minute))
+
 		_, err := ctx.backendConn.Write(msg)
 		// 💡 [性能细节]：一从网卡发出去，立刻归还内存块给 sync.Pool 复用。
 		pool.Put(msg)
@@ -237,8 +243,8 @@ func (s *Server) relayUp(c gnet.Conn, ctx *connContext) {
 		}
 
 		// 🚢 [背压自感知：低水位恢复]
-		// 当积压降至 20% 以下（约 2048 个包）时解封
-		if len(ctx.writeChan) < 2048 && atomic.CompareAndSwapInt32(&ctx.isPaused, 1, 0) {
+		// 当积压降至 20% 以下（约 400 个包）时解封
+		if len(ctx.writeChan) < 400 && atomic.CompareAndSwapInt32(&ctx.isPaused, 1, 0) {
 			logger.Infof("🟢 [背压解除] 缓冲区已消化完毕，重新唤醒读取 (Client %s, 水位: %d)", c.RemoteAddr(), len(ctx.writeChan))
 			c.Wake(nil) // 唤醒 gnet 再次触发 OnTraffic
 		}

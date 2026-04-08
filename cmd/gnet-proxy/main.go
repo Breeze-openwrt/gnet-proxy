@@ -77,10 +77,14 @@ func main() {
 
 	// Outbound Copmponents
 	dialer := outbound.NewDialer()
+	pool := outbound.NewConnectionPool(cfg, dialer)
 	transport := outbound.NewTransport()
 
+	// 🌡️ [启动预热] 在后台静默填充初始连接池
+	pool.PreheatAll()
+
 	// Inbound Component (装填出站模块与路由核心)
-	server := inbound.NewServer(cfg.ListenAddr, cfg.Multicore, router, dialer, transport)
+	server := inbound.NewServer(cfg.ListenAddr, cfg.Multicore, router, dialer, pool, transport)
 
 	// ================= 5. 点火发射 =================
 	if err := server.Run(); err != nil {

@@ -11,7 +11,9 @@ import (
 
 // 📋 路由规则
 type RouteRule struct {
-	Addr string `json:"addr"`
+	Addr        string `json:"addr"`
+	JumpStart   int    `json:"jump_start"`   // 预热连接数
+	IdleTimeout int    `json:"idle_timeout"` // 空闲超时（秒）
 }
 
 // 📋 日志配置 (对标 sing-box 格式)

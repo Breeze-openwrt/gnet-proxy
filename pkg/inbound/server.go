@@ -21,6 +21,7 @@ type Server struct {
 	multicore bool
 	router    *core.Router
 	dialer    *outbound.Dialer
+	pool      *outbound.ConnectionPool
 	transport *outbound.Transport
 }
 
@@ -34,12 +35,13 @@ type connContext struct {
 }
 
 // NewServer 构造函数，依赖注入 Router 和出站组件
-func NewServer(addr string, multicore bool, router *core.Router, dialer *outbound.Dialer, transport *outbound.Transport) *Server {
+func NewServer(addr string, multicore bool, router *core.Router, dialer *outbound.Dialer, pool *outbound.ConnectionPool, transport *outbound.Transport) *Server {
 	return &Server{
 		addr:      addr,
 		multicore: multicore,
 		router:    router,
 		dialer:    dialer,
+		pool:      pool,
 		transport: transport,
 	}
 }
@@ -145,7 +147,8 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 
 // asyncDial 在后台执行阻塞的系统调用 Dial
 func (s *Server) asyncDial(c gnet.Conn, ctx *connContext, rule config.RouteRule) {
-	backendConn, err := s.dialer.Dial(rule)
+	// 🚀 [性能进化] 优先从连接池中获取预温链接，拿不到才现场拨号
+	backendConn, err := s.pool.Acquire(rule)
 	if err != nil {
 		logger.Errorf("❌ [拨号失败] 无法连接到后端 %s (客户端 %s): %v", rule.Addr, c.RemoteAddr(), err)
 		c.Close()

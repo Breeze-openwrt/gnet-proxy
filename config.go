@@ -12,14 +12,12 @@ import (
 // 📋 路由规则
 type RouteRule struct {
 	Addr          string `json:"addr"`           
-	ProxyProtocol *bool  `json:"proxy_protocol"` 
 }
 
 // 📋 配置结构体
 type Config struct {
 	ListenAddr    string               `json:"listen_addr"`
 	Multicore     bool                 `json:"multicore"`
-	ProxyProtocol bool                 `json:"proxy_protocol"`
 	LogLevel      string               `json:"log_level"`
 	LogFile       string               `json:"log_file"`
 	RawRoutes     map[string]RouteRule `json:"routes"`         

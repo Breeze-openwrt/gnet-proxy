@@ -32,7 +32,6 @@ type proxyServer struct {
 	gnet.BuiltinEventEngine
 	addr          string
 	multicore     bool
-	proxyProtocol bool
 	verbosity     int
 	routes        map[string]RouteRule
 	bufferPool    sync.Pool
@@ -79,15 +78,6 @@ func (s *proxyServer) OnBoot(eng gnet.Engine) gnet.Action {
 func (s *proxyServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	s.infof("🔌 [接入] 新客户端: %s", c.RemoteAddr())
 	return nil, gnet.None
-}
-
-func buildProxyHeader(clientAddr, serverAddr net.Addr) string {
-	cHost, cPort, _ := net.SplitHostPort(clientAddr.String())
-	sHost, sPort, _ := net.SplitHostPort(serverAddr.String())
-	if strings.Contains(cHost, ":") {
-		return fmt.Sprintf("PROXY TCP6 %s %s %s %s\r\n", cHost, sHost, cPort, sPort)
-	}
-	return fmt.Sprintf("PROXY TCP4 %s %s %s %s\r\n", cHost, sHost, cPort, sPort)
 }
 
 func (s *proxyServer) dialBackend(rule RouteRule) (net.Conn, error) {
@@ -156,17 +146,6 @@ func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 		}
 		s.infof("✅ [拨号成功] 已连通后端 %s (客户端 %s)", rule.Addr, c.RemoteAddr())
 
-		shouldSendProxy := s.proxyProtocol
-		if rule.ProxyProtocol != nil {
-			// 如果用户显式配置了当前路由的 proxy_protocol，则强力覆盖全局配置
-			shouldSendProxy = *rule.ProxyProtocol
-		}
-
-		if shouldSendProxy {
-			proxyHeader := buildProxyHeader(c.RemoteAddr(), c.LocalAddr())
-			backendConn.Write([]byte(proxyHeader))
-			s.tracef("🛡️  发送 PROXY 报头 (Client: %s)", c.RemoteAddr())
-		}
 		newCtx := &connContext{backendConn: backendConn, isProxying: true}
 		c.SetContext(newCtx)
 		go s.proxyBack(c, backendConn)
@@ -345,7 +324,6 @@ func main() {
 	p := &proxyServer{
 		addr:          config.ListenAddr,
 		multicore:     config.Multicore,
-		proxyProtocol: config.ProxyProtocol,
 		verbosity:     verbosity, // 保持冗余兼容性
 		routes:        config.Routes,
 		bufferPool: sync.Pool{

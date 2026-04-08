@@ -1,25 +1,20 @@
 {
   "listen_addr": "[::]:4488",
   "multicore": true,
-  "proxy_protocol": true,
   "log_level": "info",
   "log_file": "",
   "routes": {
     "google.com, www.google.com": {
-      "addr": "tcp://127.0.0.1:10001",
-      "proxy_protocol": true
+      "addr": "tcp://127.0.0.1:10001"
     },
     "microsoft.com, bing.com, azure.com": {
-      "addr": "unix:///tmp/mihomo.sock",
-      "proxy_protocol": true
+      "addr": "unix:///tmp/mihomo.sock"
     },
     "updates.cdn-apple.com": {
-      "addr": "tcp://localhost:443",
-      "proxy_protocol": false
+      "addr": "tcp://localhost:443"
     },
     "*": {
-      "addr": "tcp://127.0.0.1:4488",
-      "proxy_protocol": true
+      "addr": "tcp://127.0.0.1:4488"
     }
   }
 }

@@ -4,55 +4,63 @@ import (
 	"io"
 	"net"
 
+	"github.com/panjf2000/gnet/v2"
+
 	"gnet-proxy/pkg/common/logger"
 	"gnet-proxy/pkg/common/pool"
-
-	"github.com/panjf2000/gnet/v2"
 )
 
-// Transport 封装底层异步传输层能力
+/**
+ * 🚛 [搬运工模块]：Transport
+ * 它的职责非常纯粹：既然路已经打通了，剩下的就是把数据包从这边搬到那边。
+ */
 type Transport struct{}
 
 func NewTransport() *Transport {
 	return &Transport{}
 }
 
-// RelayBack 执行反向转发：后端 -> 转发器 -> 客户端 (纯下行脱壳协程)
-func (t *Transport) RelayBack(c gnet.Conn, backend net.Conn) {
-	defer backend.Close()
-	// ⚠️ 极其致命的坑：这里绝不能复用单一的 buf 给 AsyncWrite 原地使用！
-	// gnet 的 AsyncWrite 是纯异步的，它将切片直接放到环形队列而不是立刻发走。
-	// 如果用 bufferPool 并且循环 Read，下一次的 Read 会直接覆盖上一次还没发出去的数据，
-	// 导致客户端收到一堆被破坏重叠的乱码，这也是为什么 TLS 层会校验失败并突然断开！
+/**
+ * 🔄 RelayBack：下行转发逻辑（后端 -> 代理 -> 客户端）
+ * 这是在另一个独立的协程里跑的。
+ * 为什么？因为客户端在发数据给我的同时，后端可能也在不停地回数据，必须双管齐下。
+ */
+func (t *Transport) RelayBack(c gnet.Conn, backendConn net.Conn) {
+	// 🏠 [资源复用池]：从内存池里拿一个 32KB 的大袋子
+	buf := pool.Get()
+	defer pool.Put(buf) // 函数执行完（连接断了）记得把袋子还回去
+
 	for {
-		// 🚀 [性能狂魔] 从内存池中获取缓冲区，避免频繁创建销毁
-		buf := pool.Get()
-		n, err := backend.Read(buf)
-		if err != nil {
-			pool.Put(buf) // 即使失败也要归还
-			if err != io.EOF {
-				logger.Errorf("❌ [网络错误] 从后端读取流被中断 (Backend -> Client %s): %v", c.RemoteAddr(), err)
-			} else {
-				logger.Debugf("✅ [正常关闭] 后端数据传输完毕并断开 (Backend -> Client %s)", c.RemoteAddr())
-			}
-			break
+		// 📥 1. 从后端链接读取数据
+		n, err := backendConn.Read(buf)
+		if n > 0 {
+			/**
+			 * 🚀 [性能狂魔细节]：
+			 * gnet 封装了底层的异步写入。调用 AsyncWrite 实际上是把数据丢进了一个队列，
+			 * 它会自动排队并最终通过操作系统的非阻塞接口发给客户端。
+			 * 这样即使客户端接收慢，也不会卡死当前的 Read 协程。
+			 */
+			// ⚠️ 必须复制出一份切片发给 AsyncWrite，因为 AsyncWrite 是异步完成的，
+			// 如果直接传原 buf 切片进去，会导致缓冲区正在被写的时候又被 Read 复用，产生数据混乱。
+			dataToSend := make([]byte, n)
+			copy(dataToSend, buf[:n])
+			c.AsyncWrite(dataToSend, nil)
 		}
-
-		logger.Tracef("⬇️ [下行数据] (Backend -> Client %s) 收到并回传 %d 字节", c.RemoteAddr(), n)
-
-		// 🚢 [零拷贝优化] 这里的切片 buf[:n] 直接交给 gnet，
-		// 配合回调函数在数据发送彻底完成后再归还池，完美解决异步数据污染问题。
-		err = c.AsyncWrite(buf[:n], func(c gnet.Conn, err error) error {
-			pool.Put(buf)
-			return nil
-		})
+		
 		if err != nil {
-			logger.Errorf("❌ [回传异常] 写回客户端失败 (Client %s): %v", c.RemoteAddr(), err)
-			// 注意：如果 AsyncWrite 本身报错，回调可能不会执行，这里需要视具体 gnet 版本实现决定是否手动归还
-			// 在 gnet v2 中，建议在此处安全处理
-			break
+			if err != io.EOF {
+				logger.Debugf("⚠️ [下行异常] 来自后端的读取错误: %v", err)
+			}
+			// 链路断了，赶紧通知 gnet 把客户端这边也关了
+			c.Close()
+			return
 		}
 	}
-	// 真正的物理断开：后端既然关了，告诉 gnet 直接杀掉前端连接，不要用 tcp 的 keepalive 熬 5 分钟
-	c.Close()
 }
+
+/**
+ * 💡 [小知识：什么是零分配转发？]
+ * 理想的转发是数据直接中转不进用户内存，
+ * 但由于我们需要在中间做 SNI 识别和后端负载均衡，
+ * 所以目前的内存池复用已经是达到“生产级”极致吞吐量的最优选。
+ */

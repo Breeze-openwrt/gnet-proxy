@@ -1,75 +1,82 @@
-# 🚀 gnet-proxy: 极致性能 443 端口 SNI 分流转发引擎 (JSONC 版)
+# 🚀 gnet-proxy: 极速流量分发器
 
-`gnet-proxy` 是一个专注于 **443 端口 SNI 分流** 的工业级极致性能工具。它利用 **gnet** 框架的多 Reactor 模型，在不解密 TLS 的情况下，将流量精准分发至后端的 Xray、Mihomo 或 Sing-box。
+[![Go Release](https://github.com/Breeze-openwrt/gnet-proxy/actions/workflows/go.yml/badge.svg)](https://github.com/Breeze-openwrt/gnet-proxy/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
----
+`gnet-proxy` 是一个专为 **高性能、轻量级、端口复用** 场景打造的流量分发引擎。它基于 `gnet` 极其高效的 Reactor 事件循环模型，实现了 TLS SNI 识别、多级路由匹配以及后端连接池预热技术。
 
-## ✨ 核心特性 (Key Features)
-
-- **0 内存分配嗅探**: 极致精简的 TLS 解析器，不产生任何 GC 压力。
-- **JSONC 原生支持**: 配置文件支持单行（`//`）和多行（`/* */`）注释。
-- **零拷贝转发**: 使用 `sync.Pool` 池化缓冲区，吞吐量直逼物理极限。
-- **智能 IP 透传**: 自动识别 TCP4/TCP6 PROXY Protocol，支持按域名精准开关。
-- **UDS 转发支持**: 支持 `unix:///` 路径转发，本地通信延迟更低。
+> [!TIP]
+> **适用场景**：REALITY 端口复用、域名流量审计、多后端（Xray/Sing-box/Mihomo）流量网关。
 
 ---
 
-## 🚦 快速开始 (Quick Start)
+## ✨ 核心特性
 
-### 📥 1. 编译
+- 🏎️ **极速性能**：基于 `gnet` v2 框架，采用单线程多路复用与 `sync.Pool` 内存池，吞吐量远超传统并发模型。
+- 🌡️ **连接预热 (Pool)**：首创连接池预温技术。在请求到来前先建立后端链接，消除 TCP 三次握手延迟，实现 **请求秒开**。
+- 🕵️‍♂️ **智能嗅探 (SNI)**：极速 TLS 握手解析，毫秒级提取访问域名，支持通配符、前缀及后缀匹配。
+- 🛡️ **生产就绪**：内置守卫进程 (Daemon)、系统服务安装器、完善的日志追踪及优雅关闭机制。
+- 🧩 **高可扩展**：遵循 DDD (领域驱动设计) 原则，逻辑与协议完全解耦。
+
+---
+
+## 🗺️ 源码阅读与学习
+
+为了帮助开发者和初学者快速上手，我们提供了保姆级的文档体系：
+
+1.  **[源码阅读导航](./docs/source_code_navigation.md)**：新手必看！跟随流量的一生，看清代码脉络。
+2.  **[深度架构分析](./docs/architecture.md)**：进阶必看！深入理解 Reactor 模型、连接池及 DDD 设计理念。
+3.  **[保姆级中文注释](./pkg/inbound/server.go)**：每一行代码都有详细解释，手把手教你高性能网络编程。
+
+---
+
+## 🛠️ 快速上手
+
+### 1. 编译 (Build)
 ```bash
-go build -o gnet-proxy .
+go build -o gnet-proxy ./cmd/gnet-proxy
 ```
 
-### 📂 2. 配置 (`config.jsonc`)
-程序默认读取当前目录下的 `config.jsonc`：
+### 2. 配置 (Config)
+编辑 `config.jsonc` (支持 JSON 与注释)：
 ```jsonc
 {
-  "listen_addr": "[::]:443",        // 🌈 监听 IPv4/IPv6 双栈
-  "multicore": true,                 // 🏎️ 性能全开
-  "proxy_protocol": true,            // 全局开启 IP 透传
+  "listen": "0.0.0.0:443",
+  "multicore": true,
   "routes": {
-    "google.com": {
-      "addr": "tcp://127.0.0.1:10001",
-      "proxy_protocol": true        // 🟢 开启透传 (Xray)
-    },
-    "apple.com": {
-      "addr": "unix:///tmp/sb.sock",
-      "proxy_protocol": false       // 🔴 显式关闭 (适配 sing-box 1.6.0+)
-    }
+    "google.com": { "addr": "127.0.0.1:10001", "jump_start": 5, "idle_timeout": 300 },
+    "*.example.com": { "addr": "unix:/tmp/xray.sock" },
+    "fallback": { "addr": "127.0.0.1:10002" }
   }
 }
 ```
 
-### 🚀 3. 运行命令
+### 3. 运行 (Run)
 ```bash
-# 👻 后台守护运行 (默认加载 config.jsonc)
-./gnet-proxy -d
+# 前台运行并展示详细日志
+./gnet-proxy -c config.jsonc -vv
 
-# 🔍 详细调试运行
-./gnet-proxy -vvv
-
-# 🛠️ 指定其他配置文件
-./gnet-proxy -c custom.jsonc
+# 安装为系统服务 (Windows)
+./gnet-proxy install
 ```
 
 ---
 
-## 🚦 命令行标志 (Flags)
+## 📂 项目结构 (Structure)
 
-| 标志 | 说明 |
-| :--- | :--- |
-| **`-c`** | 指定 JSONC 配置文件路径 (默认: `config.jsonc`) |
-| **`-d`** | 后台运行 (Daemon 模式) |
-| **`-v`** | 增加日志详细程度 (-v, -vv, -vvv) |
-| **`-h`** | 查看帮助手册 |
+```text
+.
+├── cmd/gnet-proxy/      # 入口：程序点火与依赖装配
+├── pkg/
+│   ├── inbound/         # 入站：基于 gnet 的高性能事件循环引擎
+│   ├── outbound/        # 出站：连接池管理与全速转发 (Relay)
+│   ├── core/            # 核心：路由分发大脑
+│   ├── common/          # 公共：流量识别 (Sniffer) 与内存复用 (Pool)
+│   └── config/          # 配置：多源配置加载与解析
+└── docs/                # 文档：全方位的架构与源码解析
+```
 
 ---
 
-## 🛡️ 生产环境建议 (Production)
-
-- **权限管理**: 推荐赋予二进制文件 `setcap` 权限以监听 443 端口：
-  `sudo setcap 'cap_net_bind_service=+ep' ./gnet-proxy`
-- **日志管理**: 生产环境建议使用 `-v` 基础日志，并将 `log_file` 指向固定的日志目录。
-
-**极致性能，从这一刻开始。**
+## ⚖️ 开源协议
+本项目采用 [MIT License](./LICENSE) 许可协议。

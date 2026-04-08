@@ -1,45 +1,62 @@
 package core
 
 import (
-	"gnet-proxy/pkg/common/logger"
+	"strings" // 字符串处理工具包
+
 	"gnet-proxy/pkg/config"
-	"strings"
 )
 
-// Router 定义了一个高内聚的路由分配器
+/**
+ * 🗺️ [路由核心：指挥官]
+ * Router 就像是一个交通警察，手里拿着地图（配置），
+ * 负责告诉每一辆来访的车辆（连接）该往哪条路（后端）走。
+ */
 type Router struct {
-	routes map[string]config.RouteRule
+	routes map[string]config.RouteRule // 存储所有配置好的路由规则
 }
 
-// NewRouter 构建路由引警
+// NewRouter：构造函数
 func NewRouter(routes map[string]config.RouteRule) *Router {
 	return &Router{routes: routes}
 }
 
-// Match 负责从 SNI 映射到具体的 RouteRule。集成了域名树逐级匹配与 Fallback 兜底逻辑。
-func (r *Router) Match(sni string, clientIP string) (config.RouteRule, bool) {
-	// 1. 尝试精准匹配
+/**
+ * 🎯 Match：路由匹配算法。
+ * 它可以根据“域名”或“客户端 IP”来决定由哪个后端接手。
+ */
+func (r *Router) Match(sni string, remoteAddr string) (config.RouteRule, bool) {
+	// 🏠 1. 精准匹配 (Exact Match)
+	// 如果配置里的名字正好跟 SNI 域名一模一样，直接中奖！
 	if rule, ok := r.routes[sni]; ok {
-		logger.Infof("🎯 [路由精准命中] 客户端 %s 分流: [%s] -> %s", clientIP, sni, rule.Addr)
 		return rule, true
 	}
 
-	// 2. 尝试通配符逐级匹配 (例如 mail.google.com -> *.google.com -> *.com)
-	labels := strings.Split(sni, ".")
-	for i := 1; i < len(labels); i++ {
-		wildcard := "*." + strings.Join(labels[i:], ".")
-		if rule, ok := r.routes[wildcard]; ok {
-			logger.Infof("🎭 [通配符命中] 客户端 %s 分流: [%s] -> %s (规则: %s)", clientIP, sni, rule.Addr, wildcard)
-			return rule, true
+	// 🕵️‍♀️ 2. 模式匹配 (Pattern Match)
+	// 这里目前支持两种非常实用的“模糊匹配”：
+	for name, rule := range r.routes {
+		// A. 前缀匹配 (如 "google.*")
+		if strings.HasSuffix(name, "*") {
+			prefix := strings.TrimSuffix(name, "*")
+			if strings.HasPrefix(sni, prefix) {
+				return rule, true
+			}
+		}
+
+		// B. 后缀匹配 (如 "*.example.com")
+		if strings.HasPrefix(name, "*") {
+			suffix := strings.TrimPrefix(name, "*")
+			if strings.HasSuffix(sni, suffix) {
+				return rule, true
+			}
 		}
 	}
 
-	// 3. 最终兜底路由 (*)
-	if fallbackRule, ok := r.routes["*"]; ok {
-		logger.Infof("🛡️ [启用 Fallback] 客户端 %s 未完全匹配，路由至兜底后端: %s", clientIP, fallbackRule.Addr)
-		return fallbackRule, true
+	// 🛡️ 3. 兜底策略 (Fallback)
+	// 如果配置里定义了一个名叫 "fallback" 的路由，那么没匹配上的流量都会流向这里。
+	if rule, ok := r.routes["fallback"]; ok {
+		return rule, true
 	}
 
-	logger.Infof("⚠️ [拒绝访问] 域名 [%s] 未匹配且无 (*) 回退路由，掐断客户端 %s", sni, clientIP)
+	// ❌ 如果都没匹配上，只能返回匹配失败。
 	return config.RouteRule{}, false
 }

@@ -3,7 +3,7 @@ package outbound
 import (
 	"io"
 	"net"
-	"time" // 🆕 引入时间包，用于背压时的微秒级等待
+	"time"
 
 	"github.com/panjf2000/gnet/v2"
 
@@ -11,8 +11,8 @@ import (
 )
 
 /**
- * 🚛 [搬运工模块]：Transport
- * 它的职责非常纯粹：既然路已经打通了，剩下的就是把数据包从这边搬到那边。
+ * 🚛 [搬运工模块]：Transport (纯粹暴力性能版)
+ * 职责：极致搬运。打破下行传输的一切人为瓶颈。
  */
 type Transport struct{}
 
@@ -21,40 +21,35 @@ func NewTransport() *Transport {
 }
 
 /**
- * 🔄 RelayBack：下行转发逻辑（后端 -> 代理 -> 客户端）
- * 特点：负责把后端回来的数据（如下传的文件、网页内容）全速送回给客户端。
+ * 🔄 RelayBack：下行全速转发逻辑（后端 -> 代理 -> 客户端）
+ * 核心目标：让 Youtube 下载分数起飞。
  */
 func (t *Transport) RelayBack(c gnet.Conn, backendConn net.Conn) {
-	// 🏠 [高速下载优化]：
-	// 针对下载场景，我们将单次读取的缓冲区提升至 64KB (32KB * 2)。
-	// 较大的缓冲区能显著减少系统调用次数，提升海量数据下载时的 CPU 效率。
-	buf := make([]byte, 64*1024)
-	
-	// 💡 注意：这里没有使用 pool.Get() 是因为我们想在下载链路上使用更大的 64KB 块，
-	// 而当前全局内存池是针对 32KB 优化的。
+	// 🏠 [高速下载：暴力吞吐版]
+	// 缓冲区直接提升至 512KB。
+	// 大块读写是提升 TCP 吞吐量最有效的方式，它极大地减少了内核与应用层之间的上下文切换。
+	buf := make([]byte, 512*1024)
 	
 	for {
-		// 🌊 [下行智能背压：控制水流速度]
-		// 逻辑：如果客户端处理得慢，代码积压在 gnet 的发送缓冲区里超过 8MB，我们就暂时停止从后端物理连接读取数据。
-		if c.OutboundBuffered() > 8*1024*1024 {
-			time.Sleep(1 * time.Millisecond) // 稍微缓一缓，给客户端一点消化时间
+		// 🌊 [暴力下行背压：释放水流上限]
+		// 阈值定义为 32MB。这是一个让服务器在客户端来不及处理时主动“抢跑” 32MB 数据包的暴力策略。
+		// 配合多路复用，能显著提高 YouTube 的视频缓冲速度。
+		if c.OutboundBuffered() > 32*1024*1024 {
+			// ⚡ [亚毫秒级让步]
+			// 为了防止在背压触发期间 CPU 狂转，我们让出 100 微秒。
+			// 这几乎不影响带宽，但能维持系统的低功耗与高响应性能。
+			time.Sleep(100 * time.Microsecond)
 			continue
 		}
 
-		// 🛡️ [健壮性加固：读超时防护]
-		// 设置 5 分钟的读取截止时间。如果后端长时间“静默”不发货，
-		// 我们会触发超时并主动断开，防止空占着茅坑不拉屎。
+		// 🛡️ [健壮性加固]
 		backendConn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 
-		// 📥 1. 从后端链接读取数据
+		// 📥 从后端链接以 512KB 为颗粒度进行暴力拉取
 		n, err := backendConn.Read(buf)
 		if n > 0 {
-			/**
-			 * 🚀 [性能狂魔细节]：
-			 * gnet 封装了底层的异步写入。AsyncWrite 实际上是把数据丢进了一个队列。
-			 */
-			// ⚠️ 极速下行时，内存申请是最大的性能开销。
-			// 虽然这里还有一次 copy，但通过外层的背压控制，我们确保了总内存占用始终在可控范围内。
+			// 🚀 [性能狂兽] 虽然 AsyncWrite 依然会有内部复制，
+			// 但 512KB 的大块颗粒度使得这个操作相对于 I/O 而言是非常廉价的。
 			dataToSend := make([]byte, n)
 			copy(dataToSend, buf[:n])
 			c.AsyncWrite(dataToSend, nil)
@@ -64,7 +59,6 @@ func (t *Transport) RelayBack(c gnet.Conn, backendConn net.Conn) {
 			if err != io.EOF {
 				logger.Debugf("⚠️ [下行异常] 来自后端的读取错误 (Client %s): %v", c.RemoteAddr(), err)
 			}
-			// 链路断了，赶紧通知 gnet 把客户端这边也关了
 			c.Close()
 			return
 		}
@@ -72,8 +66,8 @@ func (t *Transport) RelayBack(c gnet.Conn, backendConn net.Conn) {
 }
 
 /**
- * 💡 [小知识：为什么下行背压能提高稳定性？]
- * 在不加流控的情况下，如果后端发货极快（1Gbps）而客户端接收极慢（1Mbps），
- * 代理程序会在内存里堆积进 GB 级的数据。这会导致代理进程被系统杀掉。
- * 现在的 4MB 阈值是一个“黄金平衡点”，既保证了流水线不会空转，又保护了系统安全。
+ * 💡 [关于“暴力版”的设计哲学：为什么要 32MB？]
+ * 当你在播放 4K 视频时，传统的 4MB/8MB 缓冲区根本不够 Youtube 塞牙缝。
+ * 将背压拉升到 32MB，能让 TCP 窗口维持在一个极高且稳定的水位。
+ * 此时 Youtube 测速分数会呈现出一种“一马平川”的爆发态势。
  */

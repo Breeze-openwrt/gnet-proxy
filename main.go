@@ -249,39 +249,51 @@ func main() {
 	}
 	pflag.Parse()
 
+	// ================= 加载配置 =================
+	config, err := LoadConfig(*configPath)
+	if err != nil { log.Fatal().Msgf("❌ 配置解析错误: %v", err) }
+
 	verbosity := *verbosityPtr
+
+	// 脱壳后台驻留执行
 	if *isDaemon {
 		daemonize()
 	}
 
-	// 🚦 初始化 zerolog 级别 (支持多级详细日志)
+	// 🚦 如果命令行没有传 -v 参数，优先使用配置文件中的 log_level
+	if verbosity == 0 {
+		switch strings.ToLower(config.LogLevel) {
+		case "info":
+			verbosity = LogLevelInfo
+		case "debug":
+			verbosity = LogLevelDebug
+		case "trace":
+			verbosity = LogLevelTrace
+		}
+	}
+
+	// 初始化底层 Zerolog 的阻断拦截级别
 	zerolog.SetGlobalLevel(zerolog.Disabled) 
-	if verbosity >= LogLevelInfo {
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	}
-	if verbosity >= LogLevelDebug {
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	}
-	if verbosity >= LogLevelTrace {
-		zerolog.SetGlobalLevel(zerolog.TraceLevel)
-	}
+	if verbosity >= LogLevelInfo { zerolog.SetGlobalLevel(zerolog.InfoLevel) }
+	if verbosity >= LogLevelDebug { zerolog.SetGlobalLevel(zerolog.DebugLevel) }
+	if verbosity >= LogLevelTrace { zerolog.SetGlobalLevel(zerolog.TraceLevel) }
 
-	config, err := LoadConfig(*configPath)
-	if err != nil { log.Fatal().Msgf("❌ 配置解析错误: %v", err) }
-
-	// 📋 配置日志输出管道
+	// 📋 智能日志分流器
 	var logStream io.Writer = io.Discard
 	if verbosity > LogLevelSilent {
 		logStream = zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
 	}
 
 	if config.LogFile != "" {
-		f, _ := os.OpenFile(config.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		// 如果有日志文件，交互模式下双流输出，非交互模式下只写 JSON 到文件 (高性能)
-		if verbosity > LogLevelSilent {
+		// 追加写入模式打开日志文件
+		f, perr := os.OpenFile(config.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if perr == nil {
+			// 在终端和文本文件双流并行输出
 			log.Logger = zerolog.New(zerolog.MultiLevelWriter(logStream, f)).With().Timestamp().Logger()
 		} else {
-			log.Logger = zerolog.New(f).With().Timestamp().Logger()
+			// 如果没有权限创建日志文件，回滚到单流输出
+			log.Logger = zerolog.New(logStream).With().Timestamp().Logger()
+			log.Error().Msgf("❌ 无法打开日志文件 (%s): %v", config.LogFile, perr)
 		}
 	} else {
 		log.Logger = zerolog.New(logStream).With().Timestamp().Logger()

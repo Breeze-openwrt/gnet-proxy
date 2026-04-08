@@ -2,6 +2,7 @@ package inbound
 
 import (
 	"net"
+	"strings" // 🆕 用于协议前缀处理
 	"sync"
 	"time"
 
@@ -47,8 +48,15 @@ func NewServer(addr string, multicore bool, router *core.Router, dialer *outboun
 }
 
 func (s *Server) Run() error {
-	logger.Infof("🚀 [点火] 极速转发引擎启动于 %s (多核模式: %v)", s.listenAddr, s.multicore)
-	return gnet.Run(s, s.listenAddr,
+	// 🏠 [地址规范化]：gnet 强依赖协议前缀 (tcp://, udp://)
+	// 如果用户只写了地址（尤其是带冒号的 IPv6），net/url 会解析失败。
+	addr := s.listenAddr
+	if !strings.Contains(addr, "://") {
+		addr = "tcp://" + addr
+	}
+
+	logger.Infof("🚀 [点火] 极速转发引擎启动于 %s (多核模式: %v)", addr, s.multicore)
+	return gnet.Run(s, addr,
 		gnet.WithMulticore(s.multicore),
 		gnet.WithReusePort(true),
 		gnet.WithTCPNoDelay(gnet.TCPNoDelay),

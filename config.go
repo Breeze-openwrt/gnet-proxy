@@ -12,7 +12,7 @@ import (
 // 📋 路由规则
 type RouteRule struct {
 	Addr          string `json:"addr"`           
-	ProxyProtocol bool   `json:"proxy_protocol"` 
+	ProxyProtocol *bool  `json:"proxy_protocol"` 
 }
 
 // 📋 配置结构体

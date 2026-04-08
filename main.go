@@ -145,9 +145,11 @@ func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 		s.infof("✅ [拨号成功] 已连通后端 %s (客户端 %s)", rule.Addr, c.RemoteAddr())
 
 		shouldSendProxy := s.proxyProtocol 
-		if strings.Contains(fmt.Sprintf("%v", rule), "proxy_protocol") {
-			shouldSendProxy = rule.ProxyProtocol
+		if rule.ProxyProtocol != nil {
+			// 如果用户显式配置了当前路由的 proxy_protocol，则强力覆盖全局配置
+			shouldSendProxy = *rule.ProxyProtocol
 		}
+		
 		if shouldSendProxy {
 			proxyHeader := buildProxyHeader(c.RemoteAddr(), c.LocalAddr())
 			backendConn.Write([]byte(proxyHeader))

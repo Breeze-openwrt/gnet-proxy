@@ -6,17 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 )
 
-// Install 尝试将当前程序配置为 systemd 自启服务
+// Install 尝试将当前程序配置为 systemd 自启服务 (Linux 专属版)
 func Install() {
-	if runtime.GOOS != "linux" {
-		fmt.Println("❌ [安装失败] 仅支持 Linux/Debian 环境下使用 systemd 安装。")
-		os.Exit(1)
-	}
-
-	fmt.Println("🚀 正在安装 gnet-proxy 服务至 Debian Systemd...")
+	fmt.Println("🚀 正在安装 gnet-proxy 服务至 Linux Systemd...")
 
 	// 1. 获取当前二进制路径并移动到系统标准位置
 	currentExe, err := os.Executable()
@@ -40,8 +34,9 @@ func Install() {
 	os.MkdirAll(configDir, 0755)
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		// 默认配置模板
 		defaultConfig := `{
-  "listen_addr": "[::]:4488",
+  "listen_addr": ":443",
   "multicore": true,
   "log": {
     "disabled": false,
@@ -54,7 +49,7 @@ func Install() {
       "addr": "tcp://127.0.0.1:443"
     },
     "*": {
-      "addr": "tcp://127.0.0.1:4488"
+      "addr": "tcp://127.0.0.1:443"
     }
   }
 }`
@@ -63,8 +58,9 @@ func Install() {
 	}
 
 	// 3. 生成 systemd .service 脚本
-	// 兼容 -d 模式：配置为 forking 类型，让 systemd 根据 PID 文件追踪后台进程
-	pidFile := filepath.Join(os.TempDir(), "gnet-proxy.pid")
+	// 对齐 daemon.go 中的 getPidPath() 逻辑
+	pidFile := "/run/gnet-proxy.pid"
+	
 	serviceContent := fmt.Sprintf(`[Unit]
 Description=Gnet-Proxy High Performance XTLS Reverse Proxy
 After=network.target
@@ -98,9 +94,8 @@ WantedBy=multi-user.target
 	if err := exec.Command("systemctl", "start", "gnet-proxy").Run(); err != nil {
 		fmt.Printf("❌ 服务启动异常: %v\n", err)
 	} else {
-		fmt.Println("✅ [完美安装] gnet-proxy 已经作为开机驻留服务成功安装在幕后运行了！")
+		fmt.Println("✅ [完美安装] gnet-proxy 已经作为开机驻留服务成功安装并启动！")
 		fmt.Println("💡 查看运行状态: systemctl status gnet-proxy")
-		fmt.Println("💡 实时查看日志: tail -f /var/log/gnet-proxy.log (或系统日志 journalctl -u gnet-proxy -f)")
 	}
 	os.Exit(0)
 }
@@ -124,15 +119,9 @@ func copyFile(src, dst string) error {
 
 // Uninstall 尝试注销并卸载本机在运行后台的 gnet-proxy 组件
 func Uninstall() {
-	if runtime.GOOS != "linux" {
-		fmt.Println("❌ [卸载失败] 仅支持 Linux/Debian 环境下使用 systemd 安装的服务。")
-		os.Exit(1)
-	}
-
-	fmt.Println("🗑️ 正在触发 gnet-proxy 工业级核平卸载程序...")
+	fmt.Println("🗑️ 正在触发 gnet-proxy 工业级卸载程序...")
 
 	// 1. 强力停机并注销自启守护
-	fmt.Println("🛑 正在斩断后台幽灵连接 (Stop & Disable)")
 	exec.Command("systemctl", "stop", "gnet-proxy").Run()
 	exec.Command("systemctl", "disable", "gnet-proxy").Run()
 
@@ -140,26 +129,18 @@ func Uninstall() {
 	servicePath := "/etc/systemd/system/gnet-proxy.service"
 	if _, err := os.Stat(servicePath); err == nil {
 		os.Remove(servicePath)
-		fmt.Println("🧹 已抹除底层系统服务挂载记录 (systemd .service)")
+		fmt.Println("🧹 已抹除系统服务挂载记录 (systemd .service)")
 	}
 
-	// 重新归档 systemd 树
 	exec.Command("systemctl", "daemon-reload").Run()
 
-	// 3. 删除运行实体本身
+	// 3. 删除运行实体
 	binPath := "/usr/local/bin/gnet-proxy"
 	if _, err := os.Stat(binPath); err == nil {
 		os.Remove(binPath)
-		fmt.Println("🧹 已删除投放在 /usr/local/bin 内的可执行克隆体")
+		fmt.Println("🧹 已删除 /usr/local/bin/gnet-proxy")
 	}
 
-	fmt.Println("✅ [功成身退] gnet-proxy 系统级服务已被连根拔起！")
-
-	// ⚠️ 极其核心的操作警示：安全留痕
-	fmt.Println("⚠️ [提示] 为了防止数据丢失，我们手下留情，为您保留了相关的私有文件：")
-	fmt.Println("   📝 配置文件夹: /etc/gnet-proxy/")
-	fmt.Println("   📓 日志流水册: /var/log/gnet-proxy.log")
-	fmt.Println("   如果您希望彻彻底底骨灰级清理，请手动执行：rm -rf /etc/gnet-proxy /var/log/gnet-proxy.log")
-
+	fmt.Println("✅ [卸载完成] gnet-proxy 已被系统清理。")
 	os.Exit(0)
 }

@@ -121,3 +121,45 @@ func copyFile(src, dst string) error {
 	_, err = io.Copy(out, in)
 	return err
 }
+
+// Uninstall 尝试注销并卸载本机在运行后台的 gnet-proxy 组件
+func Uninstall() {
+	if runtime.GOOS != "linux" {
+		fmt.Println("❌ [卸载失败] 仅支持 Linux/Debian 环境下使用 systemd 安装的服务。")
+		os.Exit(1)
+	}
+
+	fmt.Println("🗑️ 正在触发 gnet-proxy 工业级核平卸载程序...")
+
+	// 1. 强力停机并注销自启守护
+	fmt.Println("🛑 正在斩断后台幽灵连接 (Stop & Disable)")
+	exec.Command("systemctl", "stop", "gnet-proxy").Run()
+	exec.Command("systemctl", "disable", "gnet-proxy").Run()
+
+	// 2. 清理系统注册单 (Service)
+	servicePath := "/etc/systemd/system/gnet-proxy.service"
+	if _, err := os.Stat(servicePath); err == nil {
+		os.Remove(servicePath)
+		fmt.Println("🧹 已抹除底层系统服务挂载记录 (systemd .service)")
+	}
+
+	// 重新归档 systemd 树
+	exec.Command("systemctl", "daemon-reload").Run()
+
+	// 3. 删除运行实体本身
+	binPath := "/usr/local/bin/gnet-proxy"
+	if _, err := os.Stat(binPath); err == nil {
+		os.Remove(binPath)
+		fmt.Println("🧹 已删除投放在 /usr/local/bin 内的可执行克隆体")
+	}
+
+	fmt.Println("✅ [功成身退] gnet-proxy 系统级服务已被连根拔起！")
+
+	// ⚠️ 极其核心的操作警示：安全留痕
+	fmt.Println("⚠️ [提示] 为了防止数据丢失，我们手下留情，为您保留了相关的私有文件：")
+	fmt.Println("   📝 配置文件夹: /etc/gnet-proxy/")
+	fmt.Println("   📓 日志流水册: /var/log/gnet-proxy.log")
+	fmt.Println("   如果您希望彻彻底底骨灰级清理，请手动执行：rm -rf /etc/gnet-proxy /var/log/gnet-proxy.log")
+
+	os.Exit(0)
+}

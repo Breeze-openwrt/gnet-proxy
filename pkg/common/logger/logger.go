@@ -34,8 +34,8 @@ func Setup(verbosity int, logFile string, enableTimestamp bool) {
 	if !enableTimestamp {
 		// 覆盖格式，不打印时间
 		consoleFmt = zerolog.ConsoleWriter{
-			Out:        os.Stdout,
-			TimeFormat: "",
+			Out:          os.Stdout,
+			TimeFormat:   "",
 			PartsExclude: []string{zerolog.TimestampFieldName},
 		}
 	} else {

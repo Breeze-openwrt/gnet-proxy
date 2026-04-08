@@ -27,9 +27,15 @@ func main() {
 	pflag.Parse()
 
 	// ================= 0. 系统安装器指令 =================
-	if len(os.Args) > 1 && os.Args[1] == "install" {
-		daemon.Install()
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "install":
+			daemon.Install()
+			return
+		case "uninstall":
+			daemon.Uninstall()
+			return
+		}
 	}
 
 	// ================= 1. 加载域配置 =================
@@ -60,7 +66,7 @@ func main() {
 			verbosity = logger.LevelTrace
 		case "warn", "error":
 			// 对于更弱的级别默认回滚到仅错误，这里统筹给 Info 或通过 LevelSilent 自定义处理。由于简化我们最小只定义了 Info，所以默认保底 Info。
-			verbosity = logger.LevelInfo 
+			verbosity = logger.LevelInfo
 		}
 	}
 	logger.Setup(verbosity, cfg.Log.Output, cfg.Log.Timestamp)

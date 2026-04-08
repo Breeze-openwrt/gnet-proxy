@@ -140,7 +140,7 @@ func (s *proxyServer) proxyBack(c gnet.Conn, backend net.Conn) {
 		err = c.AsyncWrite(buf[:n], nil)
 		if err != nil { break }
 	}
-	c.Wake() 
+	c.Wake(nil) 
 }
 
 func (s *proxyServer) OnClose(c gnet.Conn, err error) gnet.Action {

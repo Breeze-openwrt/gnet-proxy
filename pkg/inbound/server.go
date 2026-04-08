@@ -83,7 +83,7 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 
 		sni, err := sniffer.ParseSNI(buf)
 		if err != nil && err != sniffer.ErrIncompletePacket {
-			logger.Infof("❓ [未识别] 客户端 %s 无 SNI", c.RemoteAddr())
+			// 如果不是包不完整，而是解析报错，则降级处理
 		}
 
 		rule, ok := s.router.Match(sni, c.RemoteAddr().String())

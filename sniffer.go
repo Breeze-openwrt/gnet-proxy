@@ -23,46 +23,72 @@ func ParseSNI(data []byte) (string, error) {
 
 	// 1️⃣ [TLS Record Layer Type(1 Byte)]
 	var recordType uint8
-	if !s.ReadUint8(&recordType) { return "", ErrIncompletePacket }
-	if recordType != 0x16 { return "", ErrNotTLS } // 必须是 Handshake (22)
+	if !s.ReadUint8(&recordType) {
+		return "", ErrIncompletePacket
+	}
+	if recordType != 0x16 {
+		return "", ErrNotTLS
+	} // 必须是 Handshake (22)
 
 	// 2️⃣ [TLS Version(2 Bytes)]
-	if !s.Skip(2) { return "", ErrIncompletePacket }
+	if !s.Skip(2) {
+		return "", ErrIncompletePacket
+	}
 
 	// 3️⃣ [TLS Record Length(2 Bytes)] + Body
 	var record cryptobyte.String
-	if !s.ReadUint16LengthPrefixed(&record) { return "", ErrIncompletePacket }
+	if !s.ReadUint16LengthPrefixed(&record) {
+		return "", ErrIncompletePacket
+	}
 
 	// 4️⃣ [Handshake Type(1 Byte)]
 	var handshakeType uint8
-	if !record.ReadUint8(&handshakeType) { return "", ErrIncompletePacket }
-	if handshakeType != 0x01 { return "", ErrNotTLS } // 必须是 ClientHello (1)
+	if !record.ReadUint8(&handshakeType) {
+		return "", ErrIncompletePacket
+	}
+	if handshakeType != 0x01 {
+		return "", ErrNotTLS
+	} // 必须是 ClientHello (1)
 
 	// 5️⃣ [Handshake Length(3 Bytes)] + Body
 	var clientHello cryptobyte.String
-	if !record.ReadUint24LengthPrefixed(&clientHello) { return "", ErrIncompletePacket }
+	if !record.ReadUint24LengthPrefixed(&clientHello) {
+		return "", ErrIncompletePacket
+	}
 
 	// 跳过 Version (2 Bytes) 和 Random (32 Bytes)
-	if !clientHello.Skip(2) || !clientHello.Skip(32) { return "", ErrIncompletePacket }
+	if !clientHello.Skip(2) || !clientHello.Skip(32) {
+		return "", ErrIncompletePacket
+	}
 
 	// 跳过 Session ID (长度由前 1 字节决定)
 	var sessionID cryptobyte.String
-	if !clientHello.ReadUint8LengthPrefixed(&sessionID) { return "", ErrIncompletePacket }
+	if !clientHello.ReadUint8LengthPrefixed(&sessionID) {
+		return "", ErrIncompletePacket
+	}
 
 	// 跳过 Cipher Suites (长度由前 2 字节决定)
 	var cipherSuites cryptobyte.String
-	if !clientHello.ReadUint16LengthPrefixed(&cipherSuites) { return "", ErrIncompletePacket }
+	if !clientHello.ReadUint16LengthPrefixed(&cipherSuites) {
+		return "", ErrIncompletePacket
+	}
 
 	// 跳过 Compression Methods (长度由前 1 字节决定)
 	var compressionMethods cryptobyte.String
-	if !clientHello.ReadUint8LengthPrefixed(&compressionMethods) { return "", ErrIncompletePacket }
+	if !clientHello.ReadUint8LengthPrefixed(&compressionMethods) {
+		return "", ErrIncompletePacket
+	}
 
 	// 如果没有扩展字段，提前返回
-	if clientHello.Empty() { return "", ErrNoSNI }
+	if clientHello.Empty() {
+		return "", ErrNoSNI
+	}
 
 	// 6️⃣ [Extensions Length(2 Bytes)] + Extensions 流
 	var extensions cryptobyte.String
-	if !clientHello.ReadUint16LengthPrefixed(&extensions) { return "", ErrIncompletePacket }
+	if !clientHello.ReadUint16LengthPrefixed(&extensions) {
+		return "", ErrIncompletePacket
+	}
 
 	// 7️⃣ 安全循环遍历所有 Extensions
 	for !extensions.Empty() {
@@ -73,9 +99,11 @@ func ParseSNI(data []byte) (string, error) {
 		}
 
 		// 🎯 找到了 Server Name (类型编号为 0x00)
-		if extType == 0x00 { 
+		if extType == 0x00 {
 			var nameList cryptobyte.String
-			if !extData.ReadUint16LengthPrefixed(&nameList) { return "", ErrNoSNI }
+			if !extData.ReadUint16LengthPrefixed(&nameList) {
+				return "", ErrNoSNI
+			}
 
 			for !nameList.Empty() {
 				var nameType uint8
@@ -92,4 +120,3 @@ func ParseSNI(data []byte) (string, error) {
 
 	return "", ErrNoSNI
 }
-

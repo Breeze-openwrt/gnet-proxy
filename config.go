@@ -11,17 +11,17 @@ import (
 
 // 📋 路由规则
 type RouteRule struct {
-	Addr          string `json:"addr"`           
+	Addr string `json:"addr"`
 }
 
 // 📋 配置结构体
 type Config struct {
-	ListenAddr    string               `json:"listen_addr"`
-	Multicore     bool                 `json:"multicore"`
-	LogLevel      string               `json:"log_level"`
-	LogFile       string               `json:"log_file"`
-	RawRoutes     map[string]RouteRule `json:"routes"`         
-	Routes        map[string]RouteRule `json:"-"`              
+	ListenAddr string               `json:"listen_addr"`
+	Multicore  bool                 `json:"multicore"`
+	LogLevel   string               `json:"log_level"`
+	LogFile    string               `json:"log_file"`
+	RawRoutes  map[string]RouteRule `json:"routes"`
+	Routes     map[string]RouteRule `json:"-"`
 }
 
 // LoadConfig：加载并解析 JSONC 配置文件 (由业界领先的 tailscale/hujson 驱动)

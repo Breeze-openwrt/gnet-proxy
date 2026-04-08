@@ -176,8 +176,11 @@ func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 
 func (s *proxyServer) proxyBack(c gnet.Conn, backend net.Conn) {
 	defer backend.Close()
-	buf := s.bufferPool.Get().([]byte)
-	defer s.bufferPool.Put(buf)
+	// ⚠️ 极其致命的坑：这里绝不能复用单一的 buf 给 AsyncWrite 原地使用！
+	// gnet 的 AsyncWrite 是纯异步的，它将切片直接放到环形队列而不是立刻发走。
+	// 如果用 bufferPool 并且循环 Read，下一次的 Read 会直接覆盖上一次还没发出去的数据，
+	// 导致客户端收到一堆被破坏重叠的乱码，这也是为什么 TLS 层会校验失败并突然断开！
+	buf := make([]byte, 32*1024)
 	for {
 		n, err := backend.Read(buf)
 		if err != nil { 
@@ -192,7 +195,11 @@ func (s *proxyServer) proxyBack(c gnet.Conn, backend net.Conn) {
 		
 		s.tracef("⬇️ [下行数据] (Backend -> Client %s) 收到并回传 %d 字节", c.RemoteAddr(), n)
 		
-		err = c.AsyncWrite(buf[:n], nil)
+		// 必须执行非常严格的深拷贝 (Deep Copy)，确保移交给 AsyncWrite 的内容绝对安全
+		dataCopy := make([]byte, n)
+		copy(dataCopy, buf[:n])
+		
+		err = c.AsyncWrite(dataCopy, nil)
 		if err != nil { 
 			s.errorf("❌ [回传异常] 写回客户端失败 (Client %s): %v", c.RemoteAddr(), err)
 			break 

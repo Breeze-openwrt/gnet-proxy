@@ -110,9 +110,8 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 			return gnet.Close // 没路由匹配，说明是不合法的业务，直接断开！
 		}
 
-		// 🚀 [非阻塞优化]：建立上下文并标记正在拨号。
-		// 给每个连接配备一个缓存 128 个数据包的管道，防止后端卡顿时堵塞前台。
-		newCtx := &connContext{isDialing: true, writeChan: make(chan []byte, 128)}
+		// 🚀 [缓冲区优化]：将管道容量提升至 1024 (约 32MB 瞬间缓存)，防止大流量上传（如 git push）时因管道满导致连接断开。
+		newCtx := &connContext{isDialing: true, writeChan: make(chan []byte, 1024)}
 		c.SetContext(newCtx)
 
 		// 抢救第一包数据：把刚刚看到的识别数据拿出来，复制一份存进管道。
@@ -138,9 +137,9 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 			select {
 			case pCtx.writeChan <- msgCopy[:n]:
 			default:
-				// 如果 128 个槽位都满了拨号还没好，说明网络太烂，为了系统稳定必须“绝交”
+				// 如果 1024 个槽位都满了拨号还没好，说明网络太烂或突发流量过猛，为了系统稳定必须“绝交”
 				pool.Put(msgCopy)
-				logger.Errorf("❌ [拥塞] 缓冲区已爆满，强制断开 (Client %s)", c.RemoteAddr())
+				logger.Errorf("⚠️ [拥塞断线] 拨号过程中缓冲区已爆满 (Client %s)！", c.RemoteAddr())
 				return gnet.Close
 			}
 		}

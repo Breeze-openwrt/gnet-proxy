@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,10 +32,10 @@ type proxyServer struct {
 	gnet.BuiltinEventEngine
 	addr          string
 	multicore     bool
-	proxyProtocol bool                
-	verbosity     int 
-	routes        map[string]RouteRule 
-	bufferPool    sync.Pool 
+	proxyProtocol bool
+	verbosity     int
+	routes        map[string]RouteRule
+	bufferPool    sync.Pool
 }
 
 type connContext struct {
@@ -44,19 +46,27 @@ type connContext struct {
 // 🛡️ 极致性能日志包装器 (零分配重构)
 // 只有在满足日志级别时才会执行 Msgf，减少格式化开销
 func (s *proxyServer) tracef(format string, v ...interface{}) {
-	if s.verbosity >= LogLevelTrace { log.Trace().Msgf(format, v...) }
+	if s.verbosity >= LogLevelTrace {
+		log.Trace().Msgf(format, v...)
+	}
 }
 
 func (s *proxyServer) debugf(format string, v ...interface{}) {
-	if s.verbosity >= LogLevelDebug { log.Debug().Msgf(format, v...) }
+	if s.verbosity >= LogLevelDebug {
+		log.Debug().Msgf(format, v...)
+	}
 }
 
 func (s *proxyServer) infof(format string, v ...interface{}) {
-	if s.verbosity >= LogLevelInfo { log.Info().Msgf(format, v...) }
+	if s.verbosity >= LogLevelInfo {
+		log.Info().Msgf(format, v...)
+	}
 }
 
 func (s *proxyServer) errorf(format string, v ...interface{}) {
-	if s.verbosity >= LogLevelInfo { log.Error().Msgf(format, v...) }
+	if s.verbosity >= LogLevelInfo {
+		log.Error().Msgf(format, v...)
+	}
 }
 
 func (s *proxyServer) OnBoot(eng gnet.Engine) gnet.Action {
@@ -104,17 +114,19 @@ func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 		// ⚠️ 核心修复：这里不能写死 Peek(1024)！因为典型的 TLS ClientHello 通常只有 512 字节左右。
 		// 在 gnet v2 中，如果缓冲区数据不够 1024，可能会拒绝返回或抛出错误，导致整个解析流程卡死。
 		// 使用 c.Peek(-1) 代表“把当前缓冲区里拥有的所有字节都借给我看一眼”。
-		buf, _ := c.Peek(-1) 
-		
+		buf, _ := c.Peek(-1)
+
 		// 如果读出来的报文连 5 个字节（TLS头）都没有，就不要麻烦解析器了，继续等
-		if len(buf) < 5 { return gnet.None }
-		
+		if len(buf) < 5 {
+			return gnet.None
+		}
+
 		sni, err := ParseSNI(buf)
-		
+
 		if err != nil {
-			if err == ErrIncompletePacket { 
+			if err == ErrIncompletePacket {
 				// 握手包还没接收完，继续包组装
-				return gnet.None 
+				return gnet.None
 			}
 			s.infof("❓ [无域名/非TLS流量] 客户端 %s 的流量未识别到 SNI (原因: %v)，将尝试 Fallback 回退路由", c.RemoteAddr(), err)
 		} else {
@@ -144,12 +156,12 @@ func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 		}
 		s.infof("✅ [拨号成功] 已连通后端 %s (客户端 %s)", rule.Addr, c.RemoteAddr())
 
-		shouldSendProxy := s.proxyProtocol 
+		shouldSendProxy := s.proxyProtocol
 		if rule.ProxyProtocol != nil {
 			// 如果用户显式配置了当前路由的 proxy_protocol，则强力覆盖全局配置
 			shouldSendProxy = *rule.ProxyProtocol
 		}
-		
+
 		if shouldSendProxy {
 			proxyHeader := buildProxyHeader(c.RemoteAddr(), c.LocalAddr())
 			backendConn.Write([]byte(proxyHeader))
@@ -161,15 +173,15 @@ func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 	}
 
 	pCtx := c.Context().(*connContext)
-	msg, _ := c.Next(-1) 
-	
+	msg, _ := c.Next(-1)
+
 	// 记录请求转发量（只有在 trace 级别，也就是 -vvv 时才大规模刷屏显示字节数，避免性能损耗）
 	s.tracef("⬆️ [上行数据] (Client %s -> Backend) 转发了 %d 字节", c.RemoteAddr(), len(msg))
-	
+
 	_, err := pCtx.backendConn.Write(msg)
-	if err != nil { 
+	if err != nil {
 		s.errorf("❌ [转发异常] 发送数据到后端失败 (Client %s): %v", c.RemoteAddr(), err)
-		return gnet.Close 
+		return gnet.Close
 	}
 	return gnet.None
 }
@@ -183,30 +195,30 @@ func (s *proxyServer) proxyBack(c gnet.Conn, backend net.Conn) {
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := backend.Read(buf)
-		if err != nil { 
+		if err != nil {
 			if err != io.EOF {
 				// 这个是经常出现的连接被重置等底层网络错误
 				s.errorf("❌ [网络错误] 从后端读取流被中断 (Backend -> Client %s): %v", c.RemoteAddr(), err)
 			} else {
 				s.debugf("✅ [正常关闭] 后端数据传输完毕并断开 (Backend -> Client %s)", c.RemoteAddr())
 			}
-			break 
+			break
 		}
-		
+
 		s.tracef("⬇️ [下行数据] (Backend -> Client %s) 收到并回传 %d 字节", c.RemoteAddr(), n)
-		
+
 		// 必须执行非常严格的深拷贝 (Deep Copy)，确保移交给 AsyncWrite 的内容绝对安全
 		dataCopy := make([]byte, n)
 		copy(dataCopy, buf[:n])
-		
+
 		err = c.AsyncWrite(dataCopy, nil)
-		if err != nil { 
+		if err != nil {
 			s.errorf("❌ [回传异常] 写回客户端失败 (Client %s): %v", c.RemoteAddr(), err)
-			break 
+			break
 		}
 	}
 	// 唤醒 Reactor
-	c.Wake(nil) 
+	c.Wake(nil)
 }
 
 func (s *proxyServer) OnClose(c gnet.Conn, err error) gnet.Action {
@@ -215,12 +227,12 @@ func (s *proxyServer) OnClose(c gnet.Conn, err error) gnet.Action {
 	} else {
 		s.infof("👋 [连接关闭] 客户端正常断开 (Client %s)", c.RemoteAddr())
 	}
-	
+
 	if c.Context() != nil {
 		pCtx := c.Context().(*connContext)
-		if pCtx.backendConn != nil { 
+		if pCtx.backendConn != nil {
 			s.debugf("🧹 [清理] 销毁与后端的连接 (Client %s)", c.RemoteAddr())
-			pCtx.backendConn.Close() 
+			pCtx.backendConn.Close()
 		}
 	}
 	return gnet.None
@@ -229,7 +241,9 @@ func (s *proxyServer) OnClose(c gnet.Conn, err error) gnet.Action {
 func daemonize() {
 	newArgs := make([]string, 0)
 	for _, arg := range os.Args[1:] {
-		if arg != "-d" { newArgs = append(newArgs, arg) }
+		if arg != "-d" {
+			newArgs = append(newArgs, arg)
+		}
 	}
 	cmd := exec.Command(os.Args[0], newArgs...)
 	cmd.Start()
@@ -237,12 +251,30 @@ func daemonize() {
 	os.Exit(0)
 }
 
+// 🛡️ 无缝热重启机制：自动杀死上次忘了关的僵尸进程，保证端口不冲突
+func enforceSingleton() {
+	pidFile := filepath.Join(os.TempDir(), "gnet-proxy.pid")
+	if data, err := os.ReadFile(pidFile); err == nil {
+		if oldPid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+			if process, err := os.FindProcess(oldPid); err == nil {
+				// 尝试向该进城发送关闭信号 (如果进程不存在，Kill 在某些系统下也会返回 nil，但这只是尝试)
+				process.Kill()
+				// 等待一小会儿确保端口被彻底释放
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
+	}
+	// 记录当次运行的新 PID
+	currentPid := os.Getpid()
+	os.WriteFile(pidFile, []byte(strconv.Itoa(currentPid)), 0644)
+}
+
 func main() {
 	configPath := pflag.StringP("config", "c", "config.jsonc", "配置文件路径")
 	isDaemon := pflag.BoolP("daemon", "d", false, "以影子守护进程模式运行")
 	// 🚀 工业级技巧：原生支持 Count 类型参数，无需手动遍历 os.Args
 	verbosityPtr := pflag.CountP("verbose", "v", "详细日志模式 (可叠加，例如 -v, -vv, -vvv)")
-	
+
 	pflag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "🚀 gnet-proxy 极速转发器引擎\n\n用法: %s [选项]\n\n核心选项:\n", os.Args[0])
 		pflag.PrintDefaults()
@@ -251,7 +283,9 @@ func main() {
 
 	// ================= 加载配置 =================
 	config, err := LoadConfig(*configPath)
-	if err != nil { log.Fatal().Msgf("❌ 配置解析错误: %v", err) }
+	if err != nil {
+		log.Fatal().Msgf("❌ 配置解析错误: %v", err)
+	}
 
 	verbosity := *verbosityPtr
 
@@ -259,6 +293,9 @@ func main() {
 	if *isDaemon {
 		daemonize()
 	}
+
+	// 此时代码已经在最终执行环境（要么是前台运行，要么是脱壳后的子进程），立刻触发单例猎杀
+	enforceSingleton()
 
 	// 🚦 如果命令行没有传 -v 参数，优先使用配置文件中的 log_level
 	if verbosity == 0 {
@@ -273,10 +310,16 @@ func main() {
 	}
 
 	// 初始化底层 Zerolog 的阻断拦截级别
-	zerolog.SetGlobalLevel(zerolog.Disabled) 
-	if verbosity >= LogLevelInfo { zerolog.SetGlobalLevel(zerolog.InfoLevel) }
-	if verbosity >= LogLevelDebug { zerolog.SetGlobalLevel(zerolog.DebugLevel) }
-	if verbosity >= LogLevelTrace { zerolog.SetGlobalLevel(zerolog.TraceLevel) }
+	zerolog.SetGlobalLevel(zerolog.Disabled)
+	if verbosity >= LogLevelInfo {
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	}
+	if verbosity >= LogLevelDebug {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	}
+	if verbosity >= LogLevelTrace {
+		zerolog.SetGlobalLevel(zerolog.TraceLevel)
+	}
 
 	// 📋 智能日志分流器
 	var logStream io.Writer = io.Discard
@@ -300,8 +343,8 @@ func main() {
 	}
 
 	p := &proxyServer{
-		addr:      config.ListenAddr,
-		multicore: config.Multicore,
+		addr:          config.ListenAddr,
+		multicore:     config.Multicore,
 		proxyProtocol: config.ProxyProtocol,
 		verbosity:     verbosity, // 保持冗余兼容性
 		routes:        config.Routes,
@@ -311,9 +354,11 @@ func main() {
 	}
 
 	// 🛡️ [长连接保障] 显式告知 gnet 为所有客户端连接开启 TCP Keep-Alive 保活机制
-	err = gnet.Run(p, "tcp://"+p.addr, 
+	err = gnet.Run(p, "tcp://"+p.addr,
 		gnet.WithMulticore(p.multicore),
 		gnet.WithTCPKeepAlive(5*time.Minute),
 	)
-	if err != nil { log.Fatal().Msgf("❌ 运行失败: %v", err) }
+	if err != nil {
+		log.Fatal().Msgf("❌ 运行失败: %v", err)
+	}
 }

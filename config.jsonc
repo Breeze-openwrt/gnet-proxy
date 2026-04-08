@@ -1,33 +1,21 @@
 {
-  "listen_addr": "[::]:443",        // 🌈 极速双栈监听 IPv4 和 IPv6
-  "multicore": true,                 // 🏎️ 开启多核 Reactor，极限并发处理
-  "proxy_protocol": true,            // 🛡️ 全局默认开启 IP 透传
-  "log_level": "info",               // 📋 日志级别 (支持 debug/info/error, 配合 -v 参数使用)
-  "log_file": "gnet_proxy.log",      // 📝 日志持久化路径
-  
-  /* 
-     🚀 路由表定义：
-     1. 支持逗号分隔多个域名 ( google.com, www.google.com )
-     2. 自动识别 tcp:// 或 unix:// 前缀
-     3. 独立控制 Proxy Protocol (适配 sing-box 1.6.0+)
-  */
+  "listen_addr": "[::]:4488",
+  "multicore": true,
+  "proxy_protocol": true,
+  "log_level": "info",
+  "log_file": "",
   "routes": {
-    // 🎯 场景 1：Xray-core (支持 PROXY Protocol, 使用 TCP 转发)
     "google.com, www.google.com": {
       "addr": "tcp://127.0.0.1:10001",
       "proxy_protocol": true
     },
-
-    // 🎯 场景 2：Mihomo (使用 Unix Domain Socket 极致加速)
     "microsoft.com, bing.com, azure.com": {
       "addr": "unix:///tmp/mihomo.sock",
       "proxy_protocol": true
     },
-
-    // 🎯 场景 3：sing-box 1.6.0+ (⚠️ 必须显式关闭 PROXY 头部)
-    "apple.com, icloud.com": {
-      "addr": "tcp://127.0.0.1:10003",
-      "proxy_protocol": false        // ❄️ 仅发送纯净 TLS 流
+    "updates.cdn-apple.com": {
+      "addr": "tcp://localhost:443",
+      "proxy_protocol": false
     }
   }
 }

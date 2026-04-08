@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
-	"regexp"
 	"strings"
+
+	"github.com/tailscale/hujson"
 )
 
 // 📋 路由规则
@@ -24,35 +26,35 @@ type Config struct {
 	Routes        map[string]RouteRule `json:"-"`              
 }
 
-// 🧐 StripComments：剥离 JSON 中的注释 (支持 // 和 /* */)
-// 这样就能让标准的 json 库支持 JSONC 格式
-func StripComments(data []byte) []byte {
-	// 1. 移除多行注释 /* ... */
-	reMulti := regexp.MustCompile(`(?s)/\*.*?\*/`)
-	data = reMulti.ReplaceAll(data, nil)
-	
-	// 2. 移除单行注释 // ...
-	// 注意：这里用简单正则，后续如果遇到 URL 里的 // 需要更精细处理
-	// 但在我们的 config 场景下，URL 通常包裹在双引号内，我们可以针对性优化
-	reSingle := regexp.MustCompile(`//.*`)
-	data = reSingle.ReplaceAll(data, nil)
-	
-	return data
-}
-
-// LoadConfig：加载并解析 JSONC 配置文件
+// LoadConfig：加载并解析 JSONC 配置文件 (由业界领先的 tailscale/hujson 驱动)
 func LoadConfig(path string) (*Config, error) {
 	rawData, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// 🔥 核心：在解析前剥离注释
-	cleanData := StripComments(rawData)
+	// 🚀 工业级黑科技：通过 AST (抽象语法树) 完美处理注释和多余逗号
+	cleanData, err := hujson.Standardize(rawData)
+	if err != nil {
+		return nil, fmt.Errorf("JSONC 标准化失败: %v", err)
+	}
 
 	config := &Config{}
 	err = json.Unmarshal(cleanData, config)
 	if err != nil {
+		// 🚀 极致性能报错定位：如果是语法错误，计算行号和列号
+		if jerr, ok := err.(*json.SyntaxError); ok {
+			line, col := 1, 1
+			for i := 0; i < int(jerr.Offset); i++ {
+				if cleanData[i] == '\n' {
+					line++
+					col = 1
+				} else {
+					col++
+				}
+			}
+			return nil, fmt.Errorf("配置文件配置错误 (发生位置: 第 %d 行, 第 %d 列): %v", line, col, jerr)
+		}
 		return nil, err
 	}
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +13,7 @@ import (
 	"github.com/panjf2000/gnet/v2"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/pflag"
 )
 
 // 🧐 gnet-proxy：极致性能 Zero-Allocation 日志版
@@ -162,33 +162,32 @@ func daemonize() {
 	os.Exit(0)
 }
 
-func countVerbosity() int {
-	v := 0
-	for _, arg := range os.Args {
-		if strings.HasPrefix(arg, "-") && !strings.Contains(arg, "c") {
-			for _, char := range arg { if char == 'v' { v++ } }
-		}
-	}
-	return v
-}
-
 func main() {
-	configPath := flag.String("c", "config.jsonc", "Configuration path")
-	isDaemon := flag.Bool("d", false, "Daemon mode")
-	flag.Bool("v", false, "Verbose mode")
-	flag.Parse()
+	configPath := pflag.StringP("config", "c", "config.jsonc", "配置文件路径")
+	isDaemon := pflag.BoolP("daemon", "d", false, "以影子守护进程模式运行")
+	// 🚀 工业级技巧：原生支持 Count 类型参数，无需手动遍历 os.Args
+	verbosityPtr := pflag.CountP("verbose", "v", "详细日志模式 (可叠加，例如 -v, -vv, -vvv)")
+	
+	pflag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "🚀 gnet-proxy 极速转发器引擎\n\n用法: %s [选项]\n\n核心选项:\n", os.Args[0])
+		pflag.PrintDefaults()
+	}
+	pflag.Parse()
 
-	verbosity := countVerbosity()
-	if *isDaemon { daemonize() }
+	verbosity := *verbosityPtr
+	if *isDaemon {
+		daemonize()
+	}
 
-	// 🚦 初始化 zerolog 级别
-	zerolog.SetGlobalLevel(zerolog.Disabled) // 默认禁用
-	switch verbosity {
-	case LogLevelInfo:
+	// 🚦 初始化 zerolog 级别 (支持多级详细日志)
+	zerolog.SetGlobalLevel(zerolog.Disabled) 
+	if verbosity >= LogLevelInfo {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	case LogLevelDebug:
+	}
+	if verbosity >= LogLevelDebug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	case LogLevelTrace:
+	}
+	if verbosity >= LogLevelTrace {
 		zerolog.SetGlobalLevel(zerolog.TraceLevel)
 	}
 

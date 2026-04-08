@@ -1,0 +1,78 @@
+#
+# -----------------------------------------------------------------------------
+# 🌟 源码分析与赏析：这是 gnet-proxy 的“极简性能狂魔”发布流水线！
+#    【作者意图】：打造一个永远只有“最新成果”的发布页面，彻底治愈历史版本强迫症。
+#    【核心黑科技 - GOAMD64 分层编译】：
+#         我们利用 Go 1.18+ 带来的 AMD64 分层指令集支持，同一份源码产出两个层次的二进制：
+#         1. v2 版本：保证老旧服务器也能跑，兼容性之王。
+#         2. v3 版本：彻底激活 AVX2/AVX 指令集。如果你的 CPU 是近 10 年产物，这个版本的吞吐性能将达到物理极限！
+#
+#    🚨 【单 Release 覆盖机制】：
+#         不同于普通项目的版本堆叠，我们采用了“推土机”模式。
+#         发布新版本前，Actions 将横扫仓库，抹除所有旧的 Tag 和 Release，只留下一棵独苗。
+# -----------------------------------------------------------------------------
+
+name: 🚀 Build & Global Release (Linux amd64 v2/v3)
+
+on:
+  push:
+    branches:
+      - main  # 🎯 当您向主分支推送代码时，自动启动编译
+    paths-ignore:
+      - '**.md' # 📝 仅仅改了文档的话，就别浪费 GitHub 的电费去编二进制了
+  workflow_dispatch: # 🖱️ 同时也支持在网站上手动点击“Run workflow”来拉起
+
+jobs:
+  release:
+    name: 🏗️ Compile and Distribute
+    runs-on: ubuntu-latest # 🖥️ 使用最新版的 Ubuntu 作为我们的云端工厂
+    permissions:
+      contents: write # 🛡️ 极重要：必须赋予“写”权限，否则机器人无法删除旧标签和发布新成果
+    
+    steps:
+      - name: 🚚 Checkout Code
+        uses: actions/checkout@v4 # 1️⃣：把您的源代码搬运到云端工厂
+        with:
+          fetch-depth: 0 # 💎 全量拉取，否则清理逻辑看不见历史标签
+
+      - name: 🐹 Setup Go Environment
+        uses: actions/setup-go@v5 # 2️⃣：安装 Go 语言环境
+        with:
+           go-version: 'stable' # 自动使用最新的稳定版，享受最新的编译器优化
+           cache: true          # 开启缓存，让下次编译快得起飞
+
+      - name: 🍳 Compile Linux amd64 v2 (Compatibility)
+        # 🛡️ v2 级别包含 SSE4.2。它是兼容性与性能的黄金平衡点。
+        run: |
+          GOOS=linux GOARCH=amd64 GOAMD64=v2 go build -v -ldflags="-s -w" -o gnet-proxy-linux-amd64-v2 main.go
+
+      - name: 🍳 Compile Linux amd64 v3 (Performance Monster)
+        # 🔥 v3 级别激活 AVX2 指令集。对于网络转发和数据加解密有质的飞跃！
+        run: |
+          GOOS=linux GOARCH=amd64 GOAMD64=v3 go build -v -ldflags="-s -w" -o gnet-proxy-linux-amd64-v3 main.go
+
+      - name: 🧹 Pure Cleanup - Destroy Old Releases
+        # 💣 【性能狂魔的扫地僧模式】：
+        # 1. gh release list: 找出所有历史债务。
+        # 2. xargs + gh release delete: 连坐九族，连同 Git Tag 一起物理删除。
+        # 3. || true: 如果仓库本来就没有 Release，也别报错，继续往下走。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🧨 正在清空仓库所有旧的历史发布残骸..."
+          gh release list --limit 100 --json tagName -q ".[].tagName" | xargs -r -I {} gh release delete {} --cleanup-tag -y || true
+          echo "🎉 战场已清理干净，现在是绝对的纯净状态！"
+
+      - name: 🚀 Launch New Release
+        # 💎 最终发射：将两个刚出炉的“性能包”挂载到全新的 Release 上。
+        # 标签固定使用最新的日期戳，标题固定为 Latest Build。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="v$(date +'%Y.%m.%d-%H%M')"
+          gh release create "$TAG_NAME" \
+            --title "Latest Build ($TAG_NAME)" \
+            --notes "✨ 自动化编译产物。包含兼容型 (v2) 与 性能型 (v3) 两个版本。" \
+            ./gnet-proxy-linux-amd64-v2 \
+            ./gnet-proxy-linux-amd64-v3
+          echo "🎉 全球发布圆满成功！"

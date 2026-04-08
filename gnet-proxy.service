@@ -1,0 +1,22 @@
+[Unit]
+Description=gnet-proxy High Performance SNI Splitter
+After=network.target
+
+[Service]
+# 🧐 推荐使用普通用户运行，增强安全性
+User=root
+WorkingDirectory=/path/to/your/gnet-proxy
+ExecStart=/path/to/your/gnet-proxy/main -c /path/to/your/config.json
+Restart=always
+RestartSec=3
+
+# 🚀 极致性能优化：允许程序绑定低位端口 (443) 即使不是 root
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+# CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# 📋 日志设置
+StandardOutput=append:/var/log/gnet-proxy.log
+StandardError=append:/var/log/gnet-proxy.err
+
+[Install]
+WantedBy=multi-user.target

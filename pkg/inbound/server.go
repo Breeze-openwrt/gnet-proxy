@@ -2,6 +2,7 @@ package inbound
 
 import (
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -53,7 +54,7 @@ func (s *Server) Run() error {
 		addr = "tcp://" + addr
 	}
 
-	logger.Infof("🚀 [点火] 极速转发引擎启动于 %s (多核模式: %v)", addr, s.multicore)
+	logger.Infof("🚀 [点火] 极速转发引擎启动于 %s (多核模式: %v, CPU核心: %d)", addr, s.multicore, runtime.NumCPU())
 	return gnet.Run(s, addr,
 		gnet.WithMulticore(s.multicore),
 		gnet.WithReusePort(true),
@@ -99,14 +100,8 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 		firstPacket, _ := c.Next(-1) 
 		n := len(firstPacket)
 		
-		// 🛡️ [终极无损防护]：避免以前的“池化截断”Bug。
-		var firstPacketCopy []byte
-		if n <= 64*1024 {
-			firstPacketCopy = pool.Get()
-		} else {
-			// 如果数据包超过 64KB，动态分配以保证 100% 完整性。
-			firstPacketCopy = make([]byte, n)
-		}
+		// 🛡️ [多级缓冲优化]：利用分片池减少 GC 压力。
+		firstPacketCopy := pool.Get(n)
 		copy(firstPacketCopy, firstPacket)
 		newCtx.writeChan <- firstPacketCopy[:n]
 
@@ -124,14 +119,8 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 		return gnet.None
 	}
 	
-	// 🛡️ [终极无损防护]：此处是处理大 Pack 文件（Git Push）的关键。
-	var msgCopy []byte
-	if n <= 64*1024 {
-		msgCopy = pool.Get()
-	} else {
-		// 为了不截流，我们允许偶尔的内存波动，绝对不截断数据！
-		msgCopy = make([]byte, n)
-	}
+	// 🛡️ [多级缓冲优化]：利用分片池减少 GC 压力。
+	msgCopy := pool.Get(n)
 	copy(msgCopy, msg)
 
 	// 将读到的完整数据塞进管道
@@ -140,7 +129,7 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 		// 转发中
 	default:
 		// 如果 128MB 全满了，说明下游彻底瘫痪
-		if n <= 64*1024 { pool.Put(msgCopy) }
+		pool.Put(msgCopy)
 		logger.Errorf("⚠️ [拥塞] 缓冲区爆满 (Client %s)", c.RemoteAddr())
 		return gnet.Close
 	}
@@ -183,8 +172,8 @@ func (s *Server) relayUp(c gnet.Conn, ctx *connContext) {
 		ctx.backendConn.SetWriteDeadline(time.Now().Add(5 * time.Minute))
 
 		_, err := ctx.backendConn.Write(msg)
-		// 仅当是池化块时才归还，动态块交给 GC。
-		if cap(msg) == 64*1024 { pool.Put(msg) }
+		// 统一由 Put 处理，它会自动识别并回收支持的规格。
+		pool.Put(msg)
 		
 		if err != nil {
 			logger.Errorf("❌ [上行异常] 写入后端失败: %v", err)

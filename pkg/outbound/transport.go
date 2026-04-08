@@ -2,6 +2,7 @@ package outbound
 
 import (
 	"net"
+	"runtime"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
@@ -38,9 +39,12 @@ func (t *Transport) RelayBack(c gnet.Conn, backendConn net.Conn) {
 		// 在秒开场景下，小块并发优于大块堆积。
 		buf := make([]byte, 32*1024)
 		for {
-			// 🌊 灵敏流控阈值：当客户端缓冲区超过 8MB 时进入微秒级挂起。
-			if c.OutboundBuffered() > 8*1024*1024 {
-				time.Sleep(100 * time.Microsecond)
+			// 🌊 [自适应流控优化]：
+			// 1. 调大阈值至 32MB，给予视频流更大的爆发空间。
+			// 2. 移除 time.Sleep，改用 runtime.Gosched() 让出时间片。
+			// 这能保证在客户端读取恢复时，转发协程能以微秒级速度响应，而不是等待定时器唤醒。
+			if c.OutboundBuffered() > 32*1024*1024 {
+				runtime.Gosched()
 				continue
 			}
 

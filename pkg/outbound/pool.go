@@ -133,7 +133,6 @@ func (p *ConnectionPool) Acquire(rule config.RouteRule) (net.Conn, error) {
 
 /**
  * 🔄 replenishLoop：自动补货循环。
- * 这是一个永远运行在后台的勤劳协程。
  */
 func (p *ConnectionPool) replenishLoop(rule config.RouteRule) {
 	p.mu.RLock()
@@ -142,20 +141,20 @@ func (p *ConnectionPool) replenishLoop(rule config.RouteRule) {
 
 	// 1. 开机大吉：瞬间填满第一批预热链接
 	for i := 0; i < rule.JumpStart; i++ {
-		p.dialAndPut(ch, rule)
+		go p.dialAndPut(ch, rule)
 	}
 
-	// 2. 细水长流：每 2 秒巡检一次
-	ticker := time.NewTicker(2 * time.Second)
+	// 2. 细水长流：将巡检周期缩短至 500ms，实现近乎实时的感知
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// 如果发现库存（管道长度）低于目标预热值，就开始补货
-		for len(ch) < rule.JumpStart {
-			if !p.dialAndPut(ch, rule) {
-				// 拨号失败了（可能对方挂了），歇 5 秒再试，防止疯狂无效尝试导致 CPU 飙升
-				time.Sleep(5 * time.Second) 
-				break
+		currentLen := len(ch)
+		if currentLen < rule.JumpStart {
+			needed := rule.JumpStart - currentLen
+			// 🚀 [并发补货]：不再一个一个拨，而是同时启动 needed 个协程去抢！
+			for i := 0; i < needed; i++ {
+				go p.dialAndPut(ch, rule)
 			}
 		}
 	}

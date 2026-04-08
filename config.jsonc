@@ -1,5 +1,5 @@
 {
-  "listen_addr": "[::]:4488",
+  "listen_addr": "[::]:443",
   "multicore": true,
   "log": {
     "disabled": false,
@@ -9,10 +9,9 @@
   },
   "routes": {
     "updates.cdn-apple.com": {
-      "addr": "tcp://127.0.0.1:10443"
-    },
-    "*": {
-      "addr": "tcp://17.253.144.10:443"
+      "addr": "tcp://127.0.0.1:10443",
+      "jump_start": 4, // 🌡️ 保持 4 个空闲链接待命
+      "idle_timeout": 300 // 🍂 5 分钟不使用则自动销毁释放
     }
   }
 }

@@ -2,7 +2,7 @@ package inbound
 
 import (
 	"net"
-	"strings" // 🆕 用于协议前缀处理
+	"strings"
 	"sync"
 	"time"
 
@@ -48,8 +48,6 @@ func NewServer(addr string, multicore bool, router *core.Router, dialer *outboun
 }
 
 func (s *Server) Run() error {
-	// 🏠 [地址规范化]：gnet 强依赖协议前缀 (tcp://, udp://)
-	// 如果用户只写了地址（尤其是带冒号的 IPv6），net/url 会解析失败。
 	addr := s.listenAddr
 	if !strings.Contains(addr, "://") {
 		addr = "tcp://" + addr
@@ -70,9 +68,8 @@ func (s *Server) OnBoot(eng gnet.Engine) gnet.Action {
 }
 
 /**
- * 🔥 [性能狂魔核心逻辑]：OnTraffic
- * 为了解决 git push 断流，我们采用了“极速全量吸纳”模式。
- * 核心原理：无论下游发得快慢，我们第一时间把内核缓冲区读空，杜绝 CPU 空转。
+ * 🔥 [核心逻辑]：OnTraffic
+ * 通过“海量吸纳”与“动态溢出保护”实现 100% 数据完整性。
  */
 func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 	ctx := c.Context()
@@ -86,7 +83,7 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 
 		sni, err := sniffer.ParseSNI(buf)
 		if err != nil && err != sniffer.ErrIncompletePacket {
-			logger.Infof("❓ [未识别] 客户端 %s 的流量无 SNI，将使用默认路由", c.RemoteAddr())
+			logger.Infof("❓ [未识别] 客户端 %s 无 SNI", c.RemoteAddr())
 		}
 
 		rule, ok := s.router.Match(sni, c.RemoteAddr().String())
@@ -94,44 +91,57 @@ func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 			return gnet.Close
 		}
 
-		// 🚀 [生产级配比：128MB 瞬间缓冲极限]
-		// 计算：4096 slots * 32KB/slot = 128MB。
-		// 这能保证在大型 Pack 文件推送时，代理有足够的“胃口”吞掉数据。
+		// 🚀 [生产级配比：128MB 极限吸纳管道]
 		newCtx := &connContext{isDialing: true, writeChan: make(chan []byte, 4096)}
 		c.SetContext(newCtx)
 
-		// 🚢 [海吸动作]：立刻把识别用的第一包数据读走，不留在内核里。
+		// 🚢 [海吸模式]：立刻读走首个数据包
 		firstPacket, _ := c.Next(-1) 
-		firstPacketCopy := pool.Get()
-		n := copy(firstPacketCopy, firstPacket)
+		n := len(firstPacket)
+		
+		// 🛡️ [终极无损防护]：避免以前的“池化截断”Bug。
+		var firstPacketCopy []byte
+		if n <= 64*1024 {
+			firstPacketCopy = pool.Get()
+		} else {
+			// 如果数据包超过 64KB，动态分配以保证 100% 完整性。
+			firstPacketCopy = make([]byte, n)
+		}
+		copy(firstPacketCopy, firstPacket)
 		newCtx.writeChan <- firstPacketCopy[:n]
 
-		// 异步拨号
 		go s.asyncDial(c, newCtx, rule)
 		return gnet.None
 	}
 
-	// --- 第二阶段：极速吸纳管道 ---
+	// --- 第二阶段：全量吸纳 ---
 	pCtx := ctx.(*connContext)
 	
-	// 🌊 [核心改进：杜绝 CPU 空转]
-	// 不管 pCtx.isDialing 还是 pCtx.isProxying，我们先暴力读空内核缓冲区。
+	// 🌊 [全量搬运]：第一时间读空内核缓冲区，杜绝 CPU 疯转
 	msg, _ := c.Next(-1)
-	if len(msg) == 0 {
+	n := len(msg)
+	if n == 0 {
 		return gnet.None
 	}
 	
-	msgCopy := pool.Get()
-	n := copy(msgCopy, msg)
+	// 🛡️ [终极无损防护]：此处是处理大 Pack 文件（Git Push）的关键。
+	var msgCopy []byte
+	if n <= 64*1024 {
+		msgCopy = pool.Get()
+	} else {
+		// 为了不截流，我们允许偶尔的内存波动，绝对不截断数据！
+		msgCopy = make([]byte, n)
+	}
+	copy(msgCopy, msg)
 
-	// 将读到的数据塞进 128MB 缓冲管
+	// 将读到的完整数据塞进管道
 	select {
 	case pCtx.writeChan <- msgCopy[:n]:
-		// 成功入队，由后台协程慢慢吐槽
+		// 转发中
 	default:
-		// 如果 128MB 都塞不进去了，说明后端或者客户端链路已经彻底瘫痪
-		pool.Put(msgCopy)
-		logger.Errorf("⚠️ [拥塞严重] 128MB 缓冲已爆满，强制断开以保护系统 (Client %s)", c.RemoteAddr())
+		// 如果 128MB 全满了，说明下游彻底瘫痪
+		if n <= 64*1024 { pool.Put(msgCopy) }
+		logger.Errorf("⚠️ [拥塞] 缓冲区爆满 (Client %s)", c.RemoteAddr())
 		return gnet.Close
 	}
 
@@ -153,12 +163,9 @@ func (s *Server) asyncDial(c gnet.Conn, ctx *connContext, rule config.RouteRule)
 	ctx.isDialing = false
 	ctx.isProxying = true
 
-	// 1. RelayBack：后端回复 -> 发回前端
 	go s.transport.RelayBack(c, backendConn)
-	// 2. relayUp：前端暂存的数据 -> 写入后端
 	go s.relayUp(c, ctx)
 
-	// 激活读取
 	c.Wake(nil)
 }
 
@@ -168,16 +175,17 @@ func (s *Server) asyncDial(c gnet.Conn, ctx *connContext, rule config.RouteRule)
 func (s *Server) relayUp(c gnet.Conn, ctx *connContext) {
 	defer func() {
 		for msg := range ctx.writeChan {
-			pool.Put(msg)
+			if cap(msg) == 64*1024 { pool.Put(msg) }
 		}
 	}()
 
 	for msg := range ctx.writeChan {
-		// 设置 5 分钟超时，防止僵尸连接
 		ctx.backendConn.SetWriteDeadline(time.Now().Add(5 * time.Minute))
 
 		_, err := ctx.backendConn.Write(msg)
-		pool.Put(msg)
+		// 仅当是池化块时才归还，动态块交给 GC。
+		if cap(msg) == 64*1024 { pool.Put(msg) }
+		
 		if err != nil {
 			logger.Errorf("❌ [上行异常] 写入后端失败: %v", err)
 			c.Close()
@@ -186,7 +194,7 @@ func (s *Server) relayUp(c gnet.Conn, ctx *connContext) {
 	}
 }
 
-// OnClose：清理资源
+// OnClose：清理现场
 func (s *Server) OnClose(c gnet.Conn, err error) gnet.Action {
 	if c.Context() != nil {
 		pCtx := c.Context().(*connContext)

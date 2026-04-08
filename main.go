@@ -65,6 +65,12 @@ func (s *proxyServer) OnBoot(eng gnet.Engine) gnet.Action {
 	return gnet.None
 }
 
+// 🔌 新连接接入时触发
+func (s *proxyServer) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
+	s.infof("🔌 [接入] 新客户端: %s", c.RemoteAddr())
+	return nil, gnet.None
+}
+
 func buildProxyHeader(clientAddr, serverAddr net.Addr) string {
 	cHost, cPort, _ := net.SplitHostPort(clientAddr.String())
 	sHost, sPort, _ := net.SplitHostPort(serverAddr.String())
@@ -98,16 +104,17 @@ func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 		}
 		rule, ok := s.routes[sni]
 		if !ok {
-			s.debugf("🔎 域名识别成功 [%s] -> 未配置路由逻辑", sni)
+			s.infof("⚠️ [拒绝] 域名 [%s] 未配置路由规则，拒绝 %s 的连接", sni, c.RemoteAddr())
 			return gnet.Close
 		}
-		s.infof("🎯 域名命中 [%s] -> %s", sni, rule.Addr)
+		s.infof("🎯 [路由命中] 客户端 %s 分流: [%s] -> %s", c.RemoteAddr(), sni, rule.Addr)
 
 		backendConn, err := s.dialBackend(rule)
 		if err != nil {
-			s.errorf("❌ 后端拨号失败 %s: %v", rule.Addr, err)
+			s.errorf("❌ [拨号失败] 无法连接到后端 %s (客户端 %s): %v", rule.Addr, c.RemoteAddr(), err)
 			return gnet.Close
 		}
+		s.infof("✅ [拨号成功] 已连通后端 %s (客户端 %s)", rule.Addr, c.RemoteAddr())
 
 		shouldSendProxy := s.proxyProtocol 
 		if strings.Contains(fmt.Sprintf("%v", rule), "proxy_protocol") {
@@ -125,8 +132,15 @@ func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 
 	pCtx := c.Context().(*connContext)
 	msg, _ := c.Next(-1) 
+	
+	// 记录请求转发量（只有在 trace 级别，也就是 -vvv 时才大规模刷屏显示字节数，避免性能损耗）
+	s.tracef("⬆️ [上行数据] (Client %s -> Backend) 转发了 %d 字节", c.RemoteAddr(), len(msg))
+	
 	_, err := pCtx.backendConn.Write(msg)
-	if err != nil { return gnet.Close }
+	if err != nil { 
+		s.errorf("❌ [转发异常] 发送数据到后端失败 (Client %s): %v", c.RemoteAddr(), err)
+		return gnet.Close 
+	}
 	return gnet.None
 }
 
@@ -136,17 +150,41 @@ func (s *proxyServer) proxyBack(c gnet.Conn, backend net.Conn) {
 	defer s.bufferPool.Put(buf)
 	for {
 		n, err := backend.Read(buf)
-		if err != nil { break }
+		if err != nil { 
+			if err != io.EOF {
+				// 这个是经常出现的连接被重置等底层网络错误
+				s.errorf("❌ [网络错误] 从后端读取流被中断 (Backend -> Client %s): %v", c.RemoteAddr(), err)
+			} else {
+				s.debugf("✅ [正常关闭] 后端数据传输完毕并断开 (Backend -> Client %s)", c.RemoteAddr())
+			}
+			break 
+		}
+		
+		s.tracef("⬇️ [下行数据] (Backend -> Client %s) 收到并回传 %d 字节", c.RemoteAddr(), n)
+		
 		err = c.AsyncWrite(buf[:n], nil)
-		if err != nil { break }
+		if err != nil { 
+			s.errorf("❌ [回传异常] 写回客户端失败 (Client %s): %v", c.RemoteAddr(), err)
+			break 
+		}
 	}
+	// 唤醒 Reactor
 	c.Wake(nil) 
 }
 
 func (s *proxyServer) OnClose(c gnet.Conn, err error) gnet.Action {
+	if err != nil {
+		s.errorf("❌ [连接断开] 客户端异常断开 (Client %s): %v", c.RemoteAddr(), err)
+	} else {
+		s.infof("👋 [连接关闭] 客户端正常断开 (Client %s)", c.RemoteAddr())
+	}
+	
 	if c.Context() != nil {
 		pCtx := c.Context().(*connContext)
-		if pCtx.backendConn != nil { pCtx.backendConn.Close() }
+		if pCtx.backendConn != nil { 
+			s.debugf("🧹 [清理] 销毁与后端的连接 (Client %s)", c.RemoteAddr())
+			pCtx.backendConn.Close() 
+		}
 	}
 	return gnet.None
 }

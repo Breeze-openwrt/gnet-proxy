@@ -1,8 +1,12 @@
 {
   "listen_addr": "[::]:4488",
   "multicore": true,
-  "log_level": "info",
-  "log_file": "",
+  "log": {
+    "disabled": false,
+    "level": "info",
+    "output": "",
+    "timestamp": true
+  },
   "routes": {
     "google.com, www.google.com": {
       "addr": "tcp://127.0.0.1:10001"

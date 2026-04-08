@@ -48,17 +48,22 @@ func main() {
 	daemon.EnforceSingleton()
 
 	// ================= 3. 基础设施装配 (Logger) =================
-	if verbosity == 0 {
-		switch cfg.LogLevel {
+	if cfg.Log.Disabled {
+		verbosity = logger.LevelSilent
+	} else if verbosity == 0 {
+		switch cfg.Log.Level {
 		case "info":
 			verbosity = logger.LevelInfo
 		case "debug":
 			verbosity = logger.LevelDebug
 		case "trace":
 			verbosity = logger.LevelTrace
+		case "warn", "error":
+			// 对于更弱的级别默认回滚到仅错误，这里统筹给 Info 或通过 LevelSilent 自定义处理。由于简化我们最小只定义了 Info，所以默认保底 Info。
+			verbosity = logger.LevelInfo 
 		}
 	}
-	logger.Setup(verbosity, cfg.LogFile)
+	logger.Setup(verbosity, cfg.Log.Output, cfg.Log.Timestamp)
 
 	// ================= 4. 业务域装配 (DI依赖注入) =================
 	// Router Core

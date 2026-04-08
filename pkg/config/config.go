@@ -14,12 +14,19 @@ type RouteRule struct {
 	Addr string `json:"addr"`
 }
 
+// 📋 日志配置 (对标 sing-box 格式)
+type LogConfig struct {
+	Disabled  bool   `json:"disabled"`
+	Level     string `json:"level"`
+	Output    string `json:"output"`
+	Timestamp bool   `json:"timestamp"`
+}
+
 // 📋 配置结构体
 type Config struct {
 	ListenAddr string               `json:"listen_addr"`
 	Multicore  bool                 `json:"multicore"`
-	LogLevel   string               `json:"log_level"`
-	LogFile    string               `json:"log_file"`
+	Log        LogConfig            `json:"log"`
 	RawRoutes  map[string]RouteRule `json:"routes"`
 	Routes     map[string]RouteRule `json:"-"`
 }

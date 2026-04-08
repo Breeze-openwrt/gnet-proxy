@@ -17,7 +17,7 @@ const (
 )
 
 // Setup 初始化基础日志分流器
-func Setup(verbosity int, logFile string) {
+func Setup(verbosity int, logFile string, enableTimestamp bool) {
 	zerolog.SetGlobalLevel(zerolog.Disabled)
 	if verbosity >= LevelInfo {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
@@ -29,21 +29,46 @@ func Setup(verbosity int, logFile string) {
 		zerolog.SetGlobalLevel(zerolog.TraceLevel)
 	}
 
+	// 构造底层格式器
+	var consoleFmt io.Writer = os.Stdout
+	if !enableTimestamp {
+		// 覆盖格式，不打印时间
+		consoleFmt = zerolog.ConsoleWriter{
+			Out:        os.Stdout,
+			TimeFormat: "",
+			PartsExclude: []string{zerolog.TimestampFieldName},
+		}
+	} else {
+		consoleFmt = zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
+	}
+
 	var logStream io.Writer = io.Discard
 	if verbosity > LevelSilent {
-		logStream = zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
+		logStream = consoleFmt
 	}
 
 	if logFile != "" {
 		f, perr := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if perr == nil {
-			log.Logger = zerolog.New(zerolog.MultiLevelWriter(logStream, f)).With().Timestamp().Logger()
+			if enableTimestamp {
+				log.Logger = zerolog.New(zerolog.MultiLevelWriter(logStream, f)).With().Timestamp().Logger()
+			} else {
+				log.Logger = zerolog.New(zerolog.MultiLevelWriter(logStream, f))
+			}
 		} else {
-			log.Logger = zerolog.New(logStream).With().Timestamp().Logger()
+			if enableTimestamp {
+				log.Logger = zerolog.New(logStream).With().Timestamp().Logger()
+			} else {
+				log.Logger = zerolog.New(logStream)
+			}
 			log.Error().Msgf("❌ 无法打开日志文件 (%s): %v", logFile, perr)
 		}
 	} else {
-		log.Logger = zerolog.New(logStream).With().Timestamp().Logger()
+		if enableTimestamp {
+			log.Logger = zerolog.New(logStream).With().Timestamp().Logger()
+		} else {
+			log.Logger = zerolog.New(logStream)
+		}
 	}
 }
 

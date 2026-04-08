@@ -43,8 +43,12 @@ func Install() {
 		defaultConfig := `{
   "listen_addr": "[::]:4488",
   "multicore": true,
-  "log_level": "info",
-  "log_file": "/var/log/gnet-proxy.log",
+  "log": {
+    "disabled": false,
+    "level": "info",
+    "output": "/var/log/gnet-proxy.log",
+    "timestamp": true
+  },
   "routes": {
     "updates.cdn-apple.com": {
       "addr": "tcp://127.0.0.1:443"

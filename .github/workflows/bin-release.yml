@@ -44,12 +44,12 @@ jobs:
       - name: 🍳 Compile Linux amd64 v2 (Compatibility)
         # 🛡️ v2 级别包含 SSE4.2。它是兼容性与性能的黄金平衡点。
         run: |
-          GOOS=linux GOARCH=amd64 GOAMD64=v2 go build -v -ldflags="-s -w" -o gnet-proxy-linux-amd64-v2 .
+          GOOS=linux GOARCH=amd64 GOAMD64=v2 go build -v -ldflags="-s -w" -o gnet-proxy-linux-amd64-v2 ./cmd/gnet-proxy
 
       - name: 🍳 Compile Linux amd64 v3 (Performance Monster)
         # 🔥 v3 级别激活 AVX2 指令集。对于网络转发和数据加解密有质的飞跃！
         run: |
-          GOOS=linux GOARCH=amd64 GOAMD64=v3 go build -v -ldflags="-s -w" -o gnet-proxy-linux-amd64-v3 .
+          GOOS=linux GOARCH=amd64 GOAMD64=v3 go build -v -ldflags="-s -w" -o gnet-proxy-linux-amd64-v3 ./cmd/gnet-proxy
 
       - name: 🧹 Pure Cleanup - Destroy Old Releases
         # 💣 【性能狂魔的扫地僧模式】：

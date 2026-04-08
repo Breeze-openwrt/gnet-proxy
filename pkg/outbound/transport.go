@@ -47,6 +47,6 @@ func (t *Transport) RelayBack(c gnet.Conn, backend net.Conn) {
 			break
 		}
 	}
-	// 唤醒 Reactor
-	c.Wake(nil)
+	// 真正的物理断开：后端既然关了，告诉 gnet 直接杀掉前端连接，不要用 tcp 的 keepalive 熬 5 分钟
+	c.Close()
 }

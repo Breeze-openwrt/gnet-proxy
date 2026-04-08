@@ -31,5 +31,11 @@ func (d *Dialer) Dial(rule config.RouteRule) (net.Conn, error) {
 		Timeout:   3 * time.Second,
 		KeepAlive: 5 * time.Minute, // 每 5 分钟发送一次保活探测包
 	}
-	return dialer.Dial(network, target)
+	conn, err := dialer.Dial(network, target)
+	if err == nil && network == "tcp" {
+		if tcpConn, ok := conn.(*net.TCPConn); ok {
+			tcpConn.SetNoDelay(true)
+		}
+	}
+	return conn, err
 }

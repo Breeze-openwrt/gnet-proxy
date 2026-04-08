@@ -8,17 +8,11 @@
     "timestamp": true
   },
   "routes": {
-    "google.com, www.google.com": {
-      "addr": "tcp://127.0.0.1:10001"
-    },
-    "microsoft.com, bing.com, azure.com": {
-      "addr": "unix:///tmp/mihomo.sock"
-    },
     "updates.cdn-apple.com": {
-      "addr": "tcp://localhost:443"
+      "addr": "tcp://127.0.0.1:10443"
     },
     "*": {
-      "addr": "tcp://127.0.0.1:4488"
+      "addr": "tcp://17.253.144.10:443"
     }
   }
 }

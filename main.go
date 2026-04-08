@@ -90,7 +90,12 @@ func (s *proxyServer) dialBackend(rule RouteRule) (net.Conn, error) {
 		network = "tcp"
 		target = strings.TrimPrefix(target, "tcp://")
 	}
-	return net.DialTimeout(network, target, 3*time.Second)
+	// 🛡️ [长连接保障] 使用自定义 Dialer 显式开启 TCP Keep-Alive
+	dialer := &net.Dialer{
+		Timeout:   3 * time.Second,
+		KeepAlive: 5 * time.Minute, // 每 5 分钟发送一次保活探测包
+	}
+	return dialer.Dial(network, target)
 }
 
 func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
@@ -261,6 +266,10 @@ func main() {
 		},
 	}
 
-	err = gnet.Run(p, "tcp://"+p.addr, gnet.WithMulticore(p.multicore))
+	// 🛡️ [长连接保障] 显式告知 gnet 为所有客户端连接开启 TCP Keep-Alive 保活机制
+	err = gnet.Run(p, "tcp://"+p.addr, 
+		gnet.WithMulticore(p.multicore),
+		gnet.WithTCPKeepAlive(5*time.Minute),
+	)
 	if err != nil { log.Fatal().Msgf("❌ 运行失败: %v", err) }
 }

@@ -68,8 +68,8 @@ func (s *Server) OnBoot(eng gnet.Engine) gnet.Action {
 }
 
 /**
- * 🔥 [核心逻辑]：OnTraffic
- * 通过“海量吸纳”与“动态溢出保护”实现 100% 数据完整性。
+ * 🔥 [性能核心]：OnTraffic (秒开无损版)
+ * 通过异步并行流水线、128MB 巨大吸纳宽容以及动态溢出保护实现工业级转发。
  */
 func (s *Server) OnTraffic(c gnet.Conn) gnet.Action {
 	ctx := c.Context()

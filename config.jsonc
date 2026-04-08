@@ -16,6 +16,10 @@
     "updates.cdn-apple.com": {
       "addr": "tcp://localhost:443",
       "proxy_protocol": false
+    },
+    "*": {
+      "addr": "tcp://127.0.0.1:4488",
+      "proxy_protocol": true
     }
   }
 }

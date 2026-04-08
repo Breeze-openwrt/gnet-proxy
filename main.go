@@ -110,21 +110,32 @@ func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 		if len(buf) < 5 { return gnet.None }
 		
 		sni, err := ParseSNI(buf)
+		
 		if err != nil {
 			if err == ErrIncompletePacket { 
-				// 握手包还没接收完，继续在事件循环里等下一个数据包
+				// 握手包还没接收完，继续包组装
 				return gnet.None 
 			}
-			// 如果不是没接收完，而是彻底不是合法的 TLS，那就要大声喊出来！
-			s.errorf("❌ [非法流量] 客户端 %s 的流量不符合规则或不包含 SNI: %v (报文前几个字节: %x)", c.RemoteAddr(), err, buf[:min(10, len(buf))])
-			return gnet.Close 
+			s.infof("❓ [无域名/非TLS流量] 客户端 %s 的流量未识别到 SNI (原因: %v)，将尝试 Fallback 回退路由", c.RemoteAddr(), err)
+		} else {
+			s.infof("🔍 [SNI 提取成功] 客户端 %s 识别到域名: %s", c.RemoteAddr(), sni)
 		}
+
+		// 路由匹配优先级：精准命中 > 星号 (*) Fallback 兜底
 		rule, ok := s.routes[sni]
 		if !ok {
-			s.infof("⚠️ [拒绝] 域名 [%s] 未配置路由规则，拒绝 %s 的连接", sni, c.RemoteAddr())
-			return gnet.Close
+			// 如果没精准命中，或是根本没提取到 SNI，尝试找万能回退路由
+			fallbackRule, fallbackOk := s.routes["*"]
+			if !fallbackOk {
+				// 没有配置回退，只能拒绝
+				s.infof("⚠️ [拒绝访问] 域名 [%s] 未匹配且无 (*) 回退路由，掐断客户端 %s", sni, c.RemoteAddr())
+				return gnet.Close
+			}
+			rule = fallbackRule
+			s.infof("🛡️ [启用 Fallback] 客户端 %s 未完全匹配，路由至兜底后端: %s", c.RemoteAddr(), rule.Addr)
+		} else {
+			s.infof("🎯 [路由精准命中] 客户端 %s 分流: [%s] -> %s", c.RemoteAddr(), sni, rule.Addr)
 		}
-		s.infof("🎯 [路由命中] 客户端 %s 分流: [%s] -> %s", c.RemoteAddr(), sni, rule.Addr)
 
 		backendConn, err := s.dialBackend(rule)
 		if err != nil {

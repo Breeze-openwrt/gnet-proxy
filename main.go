@@ -101,10 +101,22 @@ func (s *proxyServer) dialBackend(rule RouteRule) (net.Conn, error) {
 func (s *proxyServer) OnTraffic(c gnet.Conn) gnet.Action {
 	ctx := c.Context()
 	if ctx == nil {
-		buf, _ := c.Peek(1024) 
+		// ⚠️ 核心修复：这里不能写死 Peek(1024)！因为典型的 TLS ClientHello 通常只有 512 字节左右。
+		// 在 gnet v2 中，如果缓冲区数据不够 1024，可能会拒绝返回或抛出错误，导致整个解析流程卡死。
+		// 使用 c.Peek(-1) 代表“把当前缓冲区里拥有的所有字节都借给我看一眼”。
+		buf, _ := c.Peek(-1) 
+		
+		// 如果读出来的报文连 5 个字节（TLS头）都没有，就不要麻烦解析器了，继续等
+		if len(buf) < 5 { return gnet.None }
+		
 		sni, err := ParseSNI(buf)
 		if err != nil {
-			if err == ErrIncompletePacket { return gnet.None }
+			if err == ErrIncompletePacket { 
+				// 握手包还没接收完，继续在事件循环里等下一个数据包
+				return gnet.None 
+			}
+			// 如果不是没接收完，而是彻底不是合法的 TLS，那就要大声喊出来！
+			s.errorf("❌ [非法流量] 客户端 %s 的流量不符合规则或不包含 SNI: %v (报文前几个字节: %x)", c.RemoteAddr(), err, buf[:min(10, len(buf))])
 			return gnet.Close 
 		}
 		rule, ok := s.routes[sni]
